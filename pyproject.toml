@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rwlocker"
+version = "1.0"
+description = "Advanced, High-Performance, and State-Machine Based Synchronous/Asynchronous Read-Write Locks."
+readme = {file = "README-pypi.md", content-type = "text/markdown"}
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+  {name = "TahsinCr", email = "TahsinCrs@gmail.com"}
+]
+
+keywords = [
+    "rwlock", 
+    "read-write-lock",
+    "thread", 
+    "concurrency", 
+    "lock",
+    "thread-safe",
+    "async",
+    "thundering-herd"
+]
+
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14"
+]
+
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/TahsinCr/python-rwlocker"
+Repository = "https://github.com/TahsinCr/python-rwlocker"
+"Bug Tracker" = "https://github.com/TahsinCr/python-rwlocker/issues"
+"Changelog" = "https://github.com/TahsinCr/python-rwlocker/blob/master/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["rwlocker*"]
