@@ -446,9 +446,9 @@ Email: TahsinCrs@gmail.com
 
 [examples-url]: https://github.com/TahsinCr/python-rwlocker/wiki
 
-[license-url]: https://github.com/TahsinCr/python-rwlocker/blob/master/LICENSE
+[license-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/LICENSE
 
-[changelog-url]:https://github.com/TahsinCr/python-rwlocker/blob/master/CHANGELOG.md
+[changelog-url]:https://github.com/TahsinCr/python-rwlocker/blob/main/CHANGELOG.md
 
 
 
@@ -462,6 +462,6 @@ Email: TahsinCrs@gmail.com
 
 <!-- File URL -->
 
-[lang-tr-url]: https://github.com/TahsinCr/python-rwlocker/blob/master/README_tr.md
+[lang-tr-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_tr.md
 
-[lang-en-url]: https://github.com/TahsinCr/python-rwlocker/blob/master/README.md
+[lang-en-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README.md
