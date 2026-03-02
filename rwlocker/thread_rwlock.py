@@ -1,33 +1,44 @@
 """
-Advanced Read-Write Lock (RWLock) Concurrency Primitives.
+Advanced Read-Write Lock (RWLock) and Condition Concurrency Primitives.
 
-This module provides highly optimized, state-machine-based Read-Write locks.
-It supports different scheduling strategies (Write-preferring, Read-preferring, FIFO)
-and safe reentrancy for writer threads.
+This module provides highly optimized, state-machine-based Read-Write locks 
+and their corresponding Condition variables. It supports different scheduling 
+strategies (Write-preferring, Read-preferring, FIFO) and safe reentrancy for 
+writer threads.
 
 Architecture Notes:
-    - **Smart Proxies**: The locks are interacted with via `.read` and `.write` proxy objects,
-      which transparently handle the underlying state transitions.
-    - **Circular References**: The `RWLockBase` holds references to its `read` and `write`
-      proxies, and the proxies hold a reference back to the lock base. This circular
-      dependency is resolved by Python's Garbage Collector. Do not rely on `__del__`
-      for deterministic cleanup.
-    - **Zero-Allocation Fast-Paths**: Standard lock acquisition and release operations
-      are optimized to avoid object allocations and minimize OS-level context switching.
+    - **Smart Proxies**: The locks and conditions are interacted with via 
+      `.read` and `.write` proxy objects. These proxies transparently handle 
+      the underlying state transitions and expose standard `threading` APIs.
+    - **O(1) Condition Queuing**: The `RWCondition` primitive utilizes a 
+      thread-safe micro-lock and `deque` architecture to provide pure O(1) 
+      performance for wait/notify operations, eliminating O(N) traversal 
+      bottlenecks and providing strict protection against cache stampedes.
+    - **Circular References**: The base classes (`RWLockBase`, `RWConditionBase`) 
+      hold references to their respective `read` and `write` proxies, and the 
+      proxies hold a reference back to the base. This circular dependency is 
+      resolved by Python's Garbage Collector. Do not rely on `__del__` for 
+      deterministic cleanup.
+    - **Zero-Allocation Fast-Paths**: Standard lock acquisition and release 
+      operations are optimized to avoid object allocations and minimize 
+      OS-level context switching.
 """
-
-import threading
 import time
+import threading
+from collections import deque
 from abc import ABC, abstractmethod
 from typing import Callable, Protocol, Optional
 from types import TracebackType
 
+__version__ = '2.0'
 __all__ = (
-    'Lockable', 'LockDowngradable', 'RWLockBase', 
+    'Lockable', 'LockDowngradable', 'RWLockBase', 'RWConditionBase',
     'RWLockProxy', 'RWLockReaderProxy', 'RWLockWriterProxy',
-    'RWLockWrite', 'RWLockWriteSafeWriter', 
-    'RWLockRead', 'RWLockReadSafeWriter',
-    'RWLockFIFO', 'RWLockFIFOSafeWriter'
+    'RWLockWrite', 'RWLockWriteReentrantWriter', 
+    'RWLockRead', 'RWLockReadReentrantWriter',
+    'RWLockFIFO', 'RWLockFIFOReentrantWriter',
+    'RWConditionProxy', 'RWConditionReaderProxy', 'RWConditionWriterProxy',
+    'RWCondition',
 )
 
 # Protocol and Base
@@ -88,6 +99,35 @@ class RWLockBase(ABC):
     def _on_writer_abort(self) -> None: ...
     @abstractmethod
     def _is_write_locked(self) -> bool: ...
+
+class RWConditionBase(ABC):
+    """
+    Abstract base class for all Read-Write Condition variables.
+    
+    Like RWLockBase, this class solely defines the internal state machine and 
+    core queuing operations. It strictly hides its internal mechanisms and exposes 
+    its functionality via `.read` and `.write` proxies to maintain a clean, 
+    standardized threading.Condition API.
+    """
+    __slots__ = ('_rwlock', 'read', 'write')
+    
+    def __init__(self, rwlock: 'RWLockBase'):
+        self._rwlock = rwlock
+        self.read: 'RWConditionReaderProxy' = RWConditionReaderProxy(rwcond=self)
+        self.write: 'RWConditionWriterProxy' = RWConditionWriterProxy(rwcond=self)
+
+    @abstractmethod
+    def _is_owned_read(self) -> bool: ...
+    @abstractmethod
+    def _is_owned_write(self) -> bool: ...
+    @abstractmethod
+    def _add_waiter(self) -> threading.Lock: ...
+    @abstractmethod
+    def _remove_waiter(self, waiter: threading.Lock) -> None: ...
+    @abstractmethod
+    def _notify_core(self, n: int) -> None: ...
+    @abstractmethod
+    def _notify_all_core(self) -> None: ...
 
 # Read and Write Lock Proxy
 class RWLockProxy:
@@ -245,6 +285,20 @@ class RWLockWrite(RWLockBase):
     
     Prevents new readers from acquiring the lock if there are writers waiting.
     This prevents writer starvation in read-heavy workloads.
+
+    Example:
+        ```python
+        lock = RWLockWrite()
+        
+        # Multiple readers can acquire the lock simultaneously.
+        with lock.read:
+            print("Reading data...")
+            
+        # If a writer starts waiting here, new readers are blocked
+        # until the writer finishes, preventing writer starvation.
+        with lock.write:
+            print("Updating data...")
+        ```
     """
     __slots__ = ('_writer_active',)
     def __init__(self, lock_factory: Callable[[], threading.Lock] = threading.Lock):
@@ -295,7 +349,7 @@ class RWLockWrite(RWLockBase):
     def _is_write_locked(self) -> bool: 
         return self._writer_active
 
-class RWLockWriteSafeWriter(RWLockWrite):
+class RWLockWriteReentrantWriter(RWLockWrite):
     """
     Write-preferring Read-Write Lock with Write-Reentrancy support.
     
@@ -304,6 +358,23 @@ class RWLockWriteSafeWriter(RWLockWrite):
         It allows a thread holding the write lock to acquire it again safely.
         It does NOT implicitly grant read locks to a writer; explicit downgrade
         is required for that.
+
+    Example:
+        ```python
+        lock = RWLockWriteReentrantWriter()
+        
+        with lock.write:
+            print("Outer write lock acquired.")
+            
+            # The same thread can safely re-acquire the write lock without deadlocking.
+            with lock.write:
+                print("Inner (nested) write lock acquired safely.")
+            
+            # Atomically downgrade to a read lock, allowing other readers to enter
+            # without giving up thread ownership entirely.
+            lock.write.downgrade()
+            print("Downgraded to read mode.")
+        ```
     """
     __slots__ = ('_writer_id', '_write_count')
     def __init__(self, lock_factory: Callable[[], threading.Lock] = threading.Lock):
@@ -351,6 +422,20 @@ class RWLockRead(RWLockBase):
     Allows maximum concurrency for readers by always allowing new readers to
     acquire the lock as long as a writer is not currently active.
     Beware: Can lead to writer starvation in highly concurrent read workloads.
+
+    Example:
+        ```python
+        lock = RWLockRead()
+        
+        # Readers can continuously enter the lock as long as no writer 
+        # is currently holding it, even if writers are waiting.
+        with lock.read:
+            print("Reading data...")
+            
+        # The writer must wait until ALL active readers have released the lock.
+        with lock.write:
+            print("Updating data...")
+        ```
     """
     __slots__ = ('_writer_active',)
     def __init__(self, lock_factory: Callable[[], threading.Lock] = threading.Lock):
@@ -402,12 +487,29 @@ class RWLockRead(RWLockBase):
     def _is_write_locked(self) -> bool: 
         return self._writer_active
 
-class RWLockReadSafeWriter(RWLockRead):
+class RWLockReadReentrantWriter(RWLockRead):
     """
     Read-preferring Read-Write Lock with Write-Reentrancy support.
     
     Reentrancy Note:
         Supports nested *write* locks exclusively.
+    
+    Example:
+        ```python
+        lock = RWLockReadReentrantWriter()
+        
+        with lock.write:
+            print("Outer write lock acquired.")
+            
+            # The same thread can safely re-acquire the write lock without deadlocking.
+            with lock.write:
+                print("Inner (nested) write lock acquired safely.")
+            
+            # Atomically downgrade to a read lock, allowing other readers to enter
+            # without giving up thread ownership entirely.
+            lock.write.downgrade()
+            print("Downgraded to read mode.")
+        ```
     """
     __slots__ = ('_writer_id', '_write_count')
     def __init__(self, lock_factory: Callable[[], threading.Lock] = threading.Lock):
@@ -455,6 +557,19 @@ class RWLockFIFO(RWLockBase):
     Prevents starvation for both readers and writers by enforcing an alternating
     phase mechanism. When writers wait, the turn passes to writers after the current
     readers finish, and vice-versa.
+
+    Example:
+        ```python
+        lock = RWLockFIFO()
+        
+        # Readers and writers are served strictly in the order they arrive,
+        # ensuring zero starvation for both sides.
+        with lock.read:
+            print("Reading data...")
+            
+        with lock.write:
+            print("Updating data...")
+        ```
     """
     __slots__ = ('_writer_active', '_readers_turn')
     def __init__(self, lock_factory: Callable[[], threading.Lock] = threading.Lock):
@@ -517,13 +632,30 @@ class RWLockFIFO(RWLockBase):
     def _is_write_locked(self) -> bool:
         return self._writer_active
 
-class RWLockFIFOSafeWriter(RWLockFIFO):
+class RWLockFIFOReentrantWriter(RWLockFIFO):
     """
     Fair (First-In-First-Out) Read-Write Lock with Write-Reentrancy support.
     
     Reentrancy Note:
         Supports strictly nested *write* locks. Prevents deadlock when a holding 
         writer attempts to re-acquire the write lock.
+    
+    Example:
+        ```python
+        lock = RWLockFIFOReentrantWriter()
+        
+        with lock.write:
+            print("Outer write lock acquired.")
+            
+            # The same thread can safely re-acquire the write lock without deadlocking.
+            with lock.write:
+                print("Inner (nested) write lock acquired safely.")
+            
+            # Atomically downgrade to a read lock, allowing other readers to enter
+            # without giving up thread ownership entirely.
+            lock.write.downgrade()
+            print("Downgraded to read mode.")
+        ```
     """
     __slots__ = ('_writer_id', '_write_count')
     def __init__(self, lock_factory: Callable[[], threading.Lock] = threading.Lock):
@@ -572,3 +704,273 @@ class RWLockFIFOSafeWriter(RWLockFIFO):
 
     def _is_write_locked(self) -> bool: 
         return self._writer_id is not None
+
+# Read Write Lock Proxy For Condition
+class RWConditionProxy:
+    """
+    Base proxy class acting as a standard `threading.Condition` interface.
+    
+    It holds no state of its own. It dynamically routes lock acquisitions, 
+    releases, and signaling operations to the injected core callables provided 
+    by the underlying `RWConditionBase` implementation.
+    """
+    __slots__ = (
+        '_lock_proxy', '_is_owned', '_add_waiter', 
+        '_remove_waiter', '_notify_core', '_notify_all_core'
+    )
+    
+    def __init__(self, 
+        lock_proxy: 'RWLockProxy',
+        is_owned: Callable[[], bool],
+        add_waiter: Callable[[], threading.Lock],
+        remove_waiter: Callable[[threading.Lock], None],
+        notify_core: Callable[[int], None],
+        notify_all_core: Callable[[], None]
+    ):
+        self._lock_proxy = lock_proxy
+        self._is_owned = is_owned
+        self._add_waiter = add_waiter
+        self._remove_waiter = remove_waiter
+        self._notify_core = notify_core
+        self._notify_all_core = notify_all_core
+
+    def acquire(self, blocking: bool = True, timeout: float = -1.0) -> bool:
+        """
+        Acquire the underlying lock (Read or Write depending on the proxy).
+
+        Args:
+            blocking (bool): If False, return immediately if the lock cannot be acquired.
+            timeout (float): Maximum time to wait for the lock. -1 means infinite.
+
+        Returns:
+            bool: True if the lock was acquired, False otherwise.
+        """
+        return self._lock_proxy.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        """
+        Release the underlying lock (Read or Write).
+        
+        Raises:
+            RuntimeError: If the lock was not acquired by the current thread.
+        """
+        self._lock_proxy.release()
+
+    def locked(self) -> bool:
+        """
+        Check if the underlying lock is currently held.
+
+        Returns:
+            bool: True if the lock is acquired, False otherwise.
+        """
+        return self._lock_proxy.locked()
+
+    def __enter__(self) -> bool:
+        return self._lock_proxy.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Optional[bool]:
+        return self._lock_proxy.__exit__(exc_type, exc_val, exc_tb)
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        """
+        Wait until notified or until a timeout occurs.
+        
+        This method safely releases the underlying lock, sleeps, and re-acquires
+        the lock before returning, ensuring absolute state safety even during 
+        interruptions or memory errors.
+
+        Args:
+            timeout (float, optional): Maximum time in seconds to wait.
+
+        Returns:
+            bool: True if awoken by a `notify()` call, False if the timeout expired.
+            
+        Raises:
+            RuntimeError: If the lock is not owned when `wait()` is called.
+        """
+        if not self._is_owned():
+            raise RuntimeError("cannot wait on un-acquired lock")
+            
+        waiter = self._add_waiter()
+        try:
+            self.release()
+        except Exception:
+            self._remove_waiter(waiter)
+            raise
+        
+        gotit = False
+        try:    
+            if timeout is None:
+                waiter.acquire()
+                gotit = True
+            else:
+                if timeout > 0:
+                    gotit = waiter.acquire(True, timeout)
+                else:
+                    gotit = waiter.acquire(False)
+            return gotit
+        finally:
+            self.acquire()
+            if not gotit:
+                self._remove_waiter(waiter)
+
+    def wait_for(self, predicate: Callable[[], bool], timeout: Optional[float] = None) -> bool:
+        """
+        Wait until a specific condition (predicate) evaluates to True.
+        
+        This utility method repeatedly calls `wait()` until the predicate 
+        returns a truthy value or the timeout is reached.
+
+        Args:
+            predicate (Callable): A function returning a boolean indicating 
+                                  if the desired state has been reached.
+            timeout (float, optional): Maximum total time in seconds to wait.
+
+        Returns:
+            bool: The last return value of the predicate.
+        """
+        endtime = None
+        waittime = timeout
+        result = predicate()
+        while not result:
+            if waittime is not None:
+                if endtime is None:
+                    endtime = time.monotonic() + waittime
+                else:
+                    waittime = endtime - time.monotonic()
+                    if waittime <= 0:
+                        break
+            self.wait(waittime)
+            result = predicate()
+        return result
+
+    def notify(self, n: int = 1) -> None:
+        """
+        Wake up one or more threads waiting on this condition.
+        
+        Args:
+            n (int): The maximum number of waiting threads to wake up. Defaults to 1.
+            
+        Raises:
+            RuntimeError: If the lock is not owned when `notify()` is called.
+        """
+        if not self._is_owned():
+            raise RuntimeError("cannot notify on un-acquired lock")
+        self._notify_core(n)
+
+    def notify_all(self) -> None:
+        """
+        Wake up all threads currently waiting on this condition.
+        
+        Raises:
+            RuntimeError: If the lock is not owned when `notify_all()` is called.
+        """
+        if not self._is_owned():
+            raise RuntimeError("cannot notify on un-acquired lock")
+        self._notify_all_core()
+
+class RWConditionReaderProxy(RWConditionProxy):
+    """
+    Condition proxy bound specifically to the Reader state-machine.
+    
+    Calling `wait()` on this proxy will release the underlying READ lock,
+    allowing other writers or readers to proceed while the current thread sleeps.
+    """
+    __slots__ = ()
+    def __init__(self, rwcond: RWConditionBase):
+        super().__init__(
+            lock_proxy=rwcond._rwlock.read,
+            is_owned=rwcond._is_owned_read,
+            add_waiter=rwcond._add_waiter,
+            remove_waiter=rwcond._remove_waiter,
+            notify_core=rwcond._notify_core,
+            notify_all_core=rwcond._notify_all_core
+        )
+
+class RWConditionWriterProxy(RWConditionProxy):
+    """
+    Condition proxy bound specifically to the Writer state-machine.
+    
+    Calling `wait()` on this proxy will release the underlying WRITE lock,
+    allowing other threads to acquire the lock while the current thread sleeps.
+    """
+    __slots__ = ()
+    def __init__(self, rwcond: RWConditionBase):
+        super().__init__(
+            lock_proxy=rwcond._rwlock.write,
+            is_owned=rwcond._is_owned_write,
+            add_waiter=rwcond._add_waiter,
+            remove_waiter=rwcond._remove_waiter,
+            notify_core=rwcond._notify_core,
+            notify_all_core=rwcond._notify_all_core
+        )
+
+# Read Write Lock For Condition
+class RWCondition(RWConditionBase):
+    """
+    Standard implementation of a Read-Write Condition variable.
+    
+    Utilizes a thread-safe `collections.deque` and a micro-lock to provide 
+    O(1) waiter queueing and wake-ups. It is highly optimized to prevent 
+    race conditions during massive `notify_all` calls (Cache Stampede protection).
+
+    Example:
+        ```python
+        cond = RWCondition(RWLockFIFO())
+        
+        # Reader thread
+        with cond.read:
+            cond.read.wait_for(lambda: data_ready)
+            print(data)
+            
+        # Writer thread
+        with cond.write:
+            data_ready = True
+            cond.write.notify_all()
+        ```
+    """
+    __slots__ = ('_waiters', '_internal_lock')
+    
+    def __init__(self, rwlock: Optional['RWLockBase'] = None):
+        if rwlock is None:
+            rwlock = RWLockWrite() 
+            
+        self._waiters = deque()
+        self._internal_lock = threading.Lock()
+        super().__init__(rwlock)
+    
+    def _is_owned_read(self) -> bool:
+        return self._rwlock._is_read_locked()
+
+    def _is_owned_write(self) -> bool:
+        return self._rwlock._is_write_locked()
+
+    def _add_waiter(self) -> threading.Lock:
+        waiter = threading.Lock()
+        waiter.acquire()
+        with self._internal_lock:
+            self._waiters.append(waiter)
+        return waiter
+
+    def _remove_waiter(self, waiter: threading.Lock) -> None:
+        with self._internal_lock:
+            try:
+                self._waiters.remove(waiter)
+            except ValueError:
+                pass
+
+    def _notify_core(self, n: int) -> None:
+        with self._internal_lock:
+            waiters = self._waiters
+            while waiters and n > 0:
+                waiter = waiters.popleft() 
+                try:
+                    waiter.release()
+                except RuntimeError:
+                    # gh-92530: Interrupted before removing from queue
+                    pass
+                else:
+                    n -= 1
+
+    def _notify_all_core(self) -> None:
+        self._notify_core(len(self._waiters))

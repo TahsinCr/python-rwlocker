@@ -25,7 +25,7 @@ Key Architectural Features:
       `asyncio.CancelledError`, ensuring event loop integrity during task aborts.
 
 Important Usage Notes & Gotchas:
-    - **Reentrancy (`SafeWriter` variants)**: Reentrancy is STRICTLY supported for 
+    - **Reentrancy (`ReentrantWriter` variants)**: Reentrancy is STRICTLY supported for 
       nested *write* operations by the same Thread/Task. It does NOT implicitly 
       grant read locks. You must use `.downgrade()` if you need to read.
     - **Downgrade Performance Cost**: Calling `.downgrade()` registers the current 
@@ -36,7 +36,7 @@ Important Usage Notes & Gotchas:
       Python's cyclic GC. Do not rely on `__del__` for cleanup.
 
 Basic Example:
-    >>> lock = RWLockFIFOSafeWriter()
+    >>> lock = RWLockFIFOReentrantWriter()
     >>> with lock.write:
     ...     # Exclusive write access
     ...     lock.write.downgrade()
@@ -50,3 +50,5 @@ Basic Example:
 
 from .thread_rwlock import *
 from .async_rwlock import *
+
+__version__ = '2.0'

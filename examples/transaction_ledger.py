@@ -1,13 +1,13 @@
 import threading
 import time
 import uuid
-from rwlocker.thread_rwlock import RWLockWriteSafeWriter
+from rwlocker.thread_rwlock import RWLockWriteReentrantWriter
 
 class TransactionLedger:
     """A financial ledger demonstrating atomic lock downgrading."""
     
     def __init__(self, initial_balance: float):
-        self._lock = RWLockWriteSafeWriter()
+        self._lock = RWLockWriteReentrantWriter()
         self._balance = initial_balance
         self._audit_log = []
 

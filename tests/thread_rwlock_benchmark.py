@@ -5,9 +5,9 @@ from typing import Type, List
 
 from rwlocker.thread_rwlock import (
     RWLockBase, 
-    RWLockWrite, RWLockWriteSafeWriter,
-    RWLockRead, RWLockReadSafeWriter,
-    RWLockFIFO, RWLockFIFOSafeWriter
+    RWLockWrite, RWLockWriteReentrantWriter,
+    RWLockRead, RWLockReadReentrantWriter,
+    RWLockFIFO, RWLockFIFOReentrantWriter
 )
 
 class StandardLockWrapper:
@@ -110,9 +110,9 @@ class ExactBenchmarker:
 def main():
     locks_to_test = [
         StandardLockWrapper, StandardRLockWrapper,
-        RWLockWrite, RWLockWriteSafeWriter,
-        RWLockRead, RWLockReadSafeWriter,
-        RWLockFIFO, RWLockFIFOSafeWriter
+        RWLockWrite, RWLockWriteReentrantWriter,
+        RWLockRead, RWLockReadReentrantWriter,
+        RWLockFIFO, RWLockFIFOReentrantWriter
     ]
     
     engine = ExactBenchmarker(locks_to_test)

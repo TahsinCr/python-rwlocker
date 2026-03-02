@@ -35,6 +35,9 @@ Python'daki standart kilitler (`Lock`, `RLock`) **Exclusive (Dışlayıcı)** ki
 
 `rwlocker` ise **Shared (Paylaşımlı)** okuma mantığına dayanır. Yazar kilitleri dışlayıcıyken, okuyucu kilitleri aynı anda binlerce thread veya task'ın birbirini engellemeden veriye erişmesine izin verir.  Özellikle GIL'in (Global Interpreter Lock) serbest bırakıldığı I/O (Ağ/Disk/Veritabanı) işlemlerinde sistemin gerçek potansiyelini ortaya çıkarır.
 
+### 🚀 Peki ya Condition (Durum) Değişkenleri?
+Standart kütüphanedeki `Condition` yapıları, `notify_all()` çağrıldığında bekleyen tüm thread/task'ları O(N) zaman karmaşıklığıyla (tek tek tarayarak) uyandırır. Bu durum, yüzlerce okuyucunun aynı anda uyandığı senaryolarda işlemciyi kilitleyen **"Önbellek İzdihamı" (Cache Stampede)** yaratır. `rwlocker`, tamamen `deque` (Thread) ve `dict` (Asyncio) tabanlı kuyruk mimarisiyle çalışır. Bekleyen görevleri işletim sistemini veya event-loop'u bloklamadan saf **O(1) zaman karmaşıklığında** uyandırarak izdihamları mimari seviyede yok eder.
+
 ### ✨ Temel Özellikleri
 
 * **Hem Thread Hem Asyncio Desteği:** Aynı API mantığıyla hem standart işletim sistemi thread'lerini (`rwlocker.thread_rwlock`) hem de event-loop tabanlı task'ları (`rwlocker.async_rwlock`) yönetebilirsiniz.
@@ -42,17 +45,20 @@ Python'daki standart kilitler (`Lock`, `RLock`) **Exclusive (Dışlayıcı)** ki
 * **Atomik Derece Düşürme (Downgrading):** Yazma kilidini tamamen serbest bırakmadan, araya başka bir yazar girmesine izin vermeden anında Okuma kilidine (`downgrade()`) düşürebilme özelliği.
 * **Güvenli İç İçe Geçme (Safe Reentrancy):** Aynı thread veya task'ın, Deadlock'a (ölümcül kilitlenme) sebep olmadan tekrar tekrar yazma kilidi alabilmesi için O(1) bellek işaretçisi (memory pointer) takibi.
 * **İptal Güvenliği (Cancellation Safety):** `asyncio` ortamındaki task iptallerine (`CancelledError`) karşı tam direnç. İptal edilen task'lar sistemi bozmaz, bekleyenleri güvenle uyandırır.
+* **O(1) Condition Kuyruklama (İzdiham Koruması):** `notify_all()` çağrılarında standart kütüphanelerin aksine O(N) tarama yapmaz. Yüzlerce görevi CPU'yu boğmadan anında uyandırır.
+* **Akıllı Sinyalleme (Smart Notification):** `notify(n=5)` gibi çağrılarla, sistemde "Thundering Herd" (sürü psikolojisi) yaratmadan sadece ihtiyacınız olan sayıda görevi isabetli bir şekilde uyandırma yeteneği.
+* **Kusursuz İptal Kalkanı (Cancellation Shielding):** Asenkron `Condition.wait()` bekleyişi sırasında task dışarıdan iptal edilirse (`CancelledError`), kilit durumu asla bozulmaz (corrupt olmaz). Kilit güvenle geri alınır ve diğer bekleyenlere devredilir.
 
 ### 🛡️ Kilit Stratejileri
 
-Sisteminizin darboğaz profiline göre doğru kilit stratejisini seçebilirsiniz. Her stratejinin, iç içe geçmeye (reentrancy) izin veren bir `SafeWriter` versiyonu bulunur.
+Sisteminizin darboğaz profiline göre doğru kilit stratejisini seçebilirsiniz. Her stratejinin, iç içe geçmeye (reentrancy) izin veren bir `ReentrantWriter` versiyonu bulunur.
 
 | Strateji Türü | Sınıf Adı (Thread / Async) | Açıklama | Ne Zaman Kullanılır? |
 | --- | --- | --- | --- |
 | **Yazar Öncelikli** | `RWLockWrite` / `AsyncRWLockWrite` | Bekleyen bir yazar varsa, yeni okuyucuların girmesini yasaklar. Yazar açlığını (starvation) önler. | Okuma yoğun sistemlerde yazarların ezilmesini engellemek için. |
 | **Okur Öncelikli** | `RWLockRead` / `AsyncRWLockRead` | Yazarlar beklese bile yeni okuyucuları sürekli içeri alır. Maksimum paralellik sağlar. | Yazma işlemlerinin çok nadir veya önemsiz olduğu önbellek (cache) yapılarında. |
 | **Adil (FIFO)** | `RWLockFIFO` / `AsyncRWLockFIFO` | Okur ve yazarlar arasında sırayla (fermuar gibi) geçiş hakkı tanır. İki tarafın da aç kalmasını engeller. | Yüksek frekanslı (MAVLink, WebSocket vb.) çift yönlü trafiklerde. |
-
+> 💡 **Condition (Durum) Uyumluluğu:** Kütüphanedeki `RWCondition` ve `AsyncRWCondition` sınıfları, yukarıdaki tüm kilit stratejilerini içine alacak şekilde (Dependency Injection) tasarlanmıştır. Sisteminize en uygun kilidi seçip, onu O(1) hızında bir durum makinesine dönüştürebilirsiniz.
 <br/>
 
 ## ⚙️ Mimari Sınırlamalar
@@ -64,8 +70,11 @@ Geliştiricilerin bu kütüphaneyi kullanırken bilmesi gereken mühendislik ger
 2. **Circular References (Döngüsel Referanslar):**
 Kilit sınıfları, akıllı proxy nesneleri (`.read` ve `.write`) oluştururken döngüsel bir referans grafiği (Lock -> Proxy -> Lock) kurar. Bu tasarım bilerek seçilmiştir. Bellek temizliği (Garbage Collection) `__del__` ile değil, Python'un Cyclic GC motoru tarafından güvenle halledilir.
 3. **Strict Nested Write Locks:**
-`SafeWriter` varyantlarında sadece "Yazma (Write)" kilitleri iç içe geçirilebilir (nested). Yazar, okuyucu kilidi almak istiyorsa bunu zımni (implicit) olarak yapamaz, açıkça `.downgrade()` metodunu çağırmak zorundadır. Bu, deadlock'ları mimari seviyede engellemek için alınmış kesin bir karardır.
-
+`ReentrantWriter` varyantlarında sadece "Yazma (Write)" kilitleri iç içe geçirilebilir (nested). Yazar, okuyucu kilidi almak istiyorsa bunu zımni (implicit) olarak yapamaz, açıkça `.downgrade()` metodunu çağırmak zorundadır. Bu, deadlock'ları mimari seviyede engellemek için alınmış kesin bir karardır.
+4. **Adaletin Bedeli (The Cost of Fairness):**
+Eğer `FIFO` (Adil) stratejisini kullanıyorsanız, sistem kimsenin aç kalmamasını (No Starvation) garanti altına almak için okuyucu ve yazarlar arasında katı bir sıraya dayalı bağlam değişimi (context switch) yapar. Özellikle **`RWCondition` (Durum Değişkeni)** kullanımlarında ve yazma yoğun (write-heavy) senaryolarda, bu adil sırayı koruma çabası, hiçbir kuralı olmayan standart C-tabanlı `Condition` nesnesine göre belirli bir yavaşlamaya sebep olur (Benchmark'larda FIFO'nun 0.50x çıkmasının sebebi budur). Bu bir hata veya optimizasyon eksikliği değil, "adaleti" sağlamak için ödenmesi gereken mühendislik bedelidir.
+5. **Condition Bellek Maliyeti (Memory vs CPU Trade-off):**
+Standart `threading.Condition` arka planda basit bir C seviyesi sayaç tutarken; `rwlocker`, O(1) hızında uyanma garantisi verebilmek için bekleyen her bir task/thread için bellekte minik bir `Lock` veya `asyncio.Future` objesi saklar. Bu, CPU darboğazlarını (Cache Stampede) tamamen çözer ancak on binlerce görevin beklediği ekstrem durumlarda RAM üzerinde ufak bir bellek ayak izi (memory footprint) oluşturur.
 
 <br/>
 
@@ -80,10 +89,20 @@ Standart kilitler okuyucuları tek sıraya dizip sistemi boğarken; `rwlocker` o
 * **⚖️ Balanced (Dengeli) Senaryosu (50 Okur, 50 Yazar):**
 Adil (FIFO) durum makinesi sayesinde, yazma kuyruklarının arasına okuma işlemleri paralel olarak sıkıştırılır. Sistem darboğaza girmeden standart kilitlere göre performansı **2 KAT** artırır.
 * **🛡️ Write-Heavy (Yazma öncelikli) Senaryosu (2 Okur, 100 Yazar):**
-Yazma işlemleri doğası gereği eşzamanlı (paralel) yapılamamasına rağmen, `rwlocker`'ın sıfır tahsisli (zero-allocation) akıllı proxy mimarisi sayesinde standart `C` tabanlı kilitlerden bile **%7-8 oranında daha hızlı** çalışır. O(1) maliyetli "SafeWriter" (iç içe geçme) özelliği bile performansa neredeyse hiç yük bindirmez.
+Yazma işlemleri doğası gereği eşzamanlı (paralel) yapılamamasına rağmen, `rwlocker`'ın sıfır tahsisli (zero-allocation) akıllı proxy mimarisi sayesinde standart `C` tabanlı kilitlerden bile **%7-8 oranında daha hızlı** çalışır. O(1) maliyetli "ReentrantWriter" (iç içe geçme) özelliği bile performansa neredeyse hiç yük bindirmez.
 
-*(Not: Tüm kilit sınıfları; reentrancy, deadlock, timeout ve cancellation safety senaryolarını kapsayan 135 farklı birim testinden 0 hata ile geçmiştir.)*
+**Condition (Durum Değişkeni) Performans Çıktıları:**
 
+Standart kütüphanedeki Condition yapıları O(N) tarama yaptığı için çoklu uyanmalarda CPU'yu kilitler. `rwlocker`'ın O(1) kuyruk mimarisi ise bu noktada standart kütüphaneyi adeta yok eder.
+
+* **📣 Massive Broadcast (Devasa Yayın - 1 Yazar, 100 Okur):**
+Tek bir yazar veri tabanını güncelleyip bekleyen yüzlerce okuyucuyu uyandırdığında (`notify_all`); O(1) mimarimiz sayesinde **Threading tarafında ~65 KAT**, **Asyncio tarafında ~70 KAT** daha hızlı işlem hacmi (Ops/sec) elde edilmiştir. Sistem "Önbellek İzdihamı"na girmekten kurtarılmıştır.
+* **🔀 Balanced Pub/Sub (50 Yazar, 50 Okur):**
+Karışık uyanma ve bekleme senaryolarında, `Write-Pref` stratejisine sahip Condition kilitlerimiz standart kütüphaneden **~2 KAT** daha hızlı çalışmıştır.
+* **📉 Write-Heavy Sınırı (Yazma Stres Testi - 100 Yazar, 2 Okur):**
+Yazarların sürekli birbirini bloklayıp `notify()` çağırdığı bu acımasız senaryoda, C-tabanlı standart kilitler hız avantajını kullanır. `rwlocker`'ın Write-Pref modeli standart kilitle kafa kafaya (1.0x) başa çıkarken, FIFO ve Read-Pref modelleri adaleti sağlamak uğruna bilerek yavaşlar (0.5x - 0.7x).
+
+*(Not: Tüm kilit ve condition sınıfları; reentrancy, deadlock, timeout, O(N) kaçakları ve cancellation safety senaryolarını kapsayan **252 farklı birim testinden** (unit tests) 0 hata ile geçmiş ve milisaniyeler içinde tamamlanmıştır.)*
 
 <br/>
 
@@ -92,7 +111,7 @@ Yazma işlemleri doğası gereği eşzamanlı (paralel) yapılamamasına rağmen
 ### 🛠️ Bağımlılıklar
 
 * Dış bağımlılık bulunmamaktadır.
-* Sadece Python Standart Kütüphanesi (`threading`, `asyncio`, `typing`).
+* Sadece Python Standart Kütüphanesi (`threading`, `asyncio`, `typing`, `collections`).
 * Python 3.9+ ile tam uyumlu.
 
 ### 📦 Kurulum
@@ -155,11 +174,11 @@ Veriyi güncelledikten (Write) hemen sonra, araya başka bir yazar (başka bir i
 
 ```python
 import uuid
-from rwlocker.thread_rwlock import RWLockWriteSafeWriter
+from rwlocker.thread_rwlock import RWLockWriteReentrantWriter
 
 class TransactionLedger:
     def __init__(self):
-        self._lock = RWLockWriteSafeWriter()
+        self._lock = RWLockWriteReentrantWriter()
         self._balance = 1000.0
 
     def process_payment(self, amount: float):
@@ -253,6 +272,78 @@ class TelemetryDispatcher:
 
 ```
 
+#### 5. Olay Güdümlü Önbellek Yenileme (Async Condition & İzdiham Koruması)
+
+Süresi dolan bir veriyi binlerce task aynı anda veri tabanından çekmeye çalışırsa DB çöker. `AsyncRWCondition` ile 1 task veriyi güncellerken, diğer 999 task CPU'yu boğmadan (O(1) hızında) güvenle uyutulur ve ardından tek seferde uyandırılır.
+
+```python
+import asyncio
+from rwlocker.async_rwlock import AsyncRWLockRead, AsyncRWCondition
+
+class GlobalConfigCache:
+    def __init__(self):
+        # Okuma çok yoğun olduğu için Read-Pref kilidi kullanıyoruz
+        self._cond = AsyncRWCondition(AsyncRWLockRead())
+        self._config = {}
+        self._is_refreshing = False
+
+    async def get_config(self) -> dict:
+        """Binlerce concurrent request tarafından çağrılır."""
+        async with self._cond.read:
+            # Eğer DB'den güncelleme yapılıyorsa, DB'ye saldırmak yerine uyuyarak bekle.
+            # wait_for metodu Spurious Wakeup (yanlış uyanma) durumlarını otomatik çözer.
+            await self._cond.read.wait_for(lambda: not self._is_refreshing)
+            return self._config
+
+    async def force_refresh_from_db(self) -> None:
+        """Webhook ile tetiklendiğinde tek başına çalışır."""
+        async with self._cond.write:
+            self._is_refreshing = True
+            
+            await asyncio.sleep(0.5) # Yavaş Veritabanı sorgusu simülasyonu
+            self._config = {"theme": "dark", "version": 2}
+            self._is_refreshing = False
+            
+            # Bekleyen BİNLERCE okuyucu task'ı O(1) hızında uyandır. İzdiham yok!
+            self._cond.write.notify_all()
+```
+
+#### 6. İsabetli İş Kuyruğu (Thread Condition & Hedefli Uyandırma)
+
+Sisteme 3 adet yeni iş geldiğinde, boştaki 50 adet worker thread'in hepsini uyandırmak ("Thundering Herd" problemi) yerine, sadece `notify(n=3)` diyerek isabetli uyandırma yapar.
+
+```python
+from collections import deque
+import threading
+from rwlocker.thread_rwlock import RWLockFIFO, RWCondition
+
+class ImageProcessingQueue:
+    def __init__(self):
+        # Üretici ve Tüketicilerin birbirini ezmemesi için adil FIFO stratejisi
+        self._cond = RWCondition(RWLockFIFO())
+        self._queue = deque()
+
+    def add_jobs(self, jobs: list[str]):
+        """Üretici: Kuyruğa yeni işler ekler."""
+        with self._cond.write:
+            self._queue.extend(jobs)
+            
+            # AKILLI SİNYAL: Kaç iş geldiyse, sadece o kadar Thread'i uyandır.
+            # Sistemdeki diğer uyuyan Thread'ler boşuna CPU harcamaz.
+            self._cond.write.notify(n=len(jobs))
+
+    def consume_job(self):
+        """Tüketici: İş gelene kadar uyur, gelince alır."""
+        with self._cond.read:
+            # Kuyrukta iş yoksa güvenle bekle
+            self._cond.read.wait_for(lambda: len(self._queue) > 0)
+            job = self._queue.popleft()
+
+        # Kilidi bıraktıktan SONRA ağır işlemi gerçekleştir.
+        print(f"İşleniyor: {job}")
+
+```
+
 _Daha fazla örnek için lütfen [örnekler][examples-url] klasörüne bakın_
 
 Önerilen özelliklerin (ve bilinen sorunların) tam listesi için [açık sorunlara][issues-url] bakın.
@@ -296,7 +387,7 @@ Projeyi faydalı bulduysanız sağ üstten bir **Yıldız (⭐)** vermeyi unutma
 
 5. Bu repoya gelerek bir **Pull Request (Çekme İsteği)** açın.
 
-> ⚠️ **Önemli Geliştirici Notu:** `rwlocker` mimarisi *deadlock* ve *reentrancy* senaryolarına karşı son derece hassastır. Lütfen PR açmadan önce projedeki **135+ birim testinin (unit tests) tamamının firesiz geçtiğinden** ve kodunuzun **Python 3.9+** standartlarıyla uyumlu olduğundan emin olun.
+> ⚠️ **Önemli Geliştirici Notu:** `rwlocker` mimarisi *deadlock* ve *reentrancy* senaryolarına karşı son derece hassastır. Lütfen PR açmadan önce projedeki **252+ birim testinin (unit tests) tamamının firesiz geçtiğinden** ve kodunuzun **Python 3.9+** standartlarıyla uyumlu olduğundan emin olun.
 
 
 <br/>

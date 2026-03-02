@@ -4,9 +4,9 @@ import time
 from typing import Type
 
 from rwlocker.thread_rwlock import (
-    RWLockWrite, RWLockWriteSafeWriter,
-    RWLockRead, RWLockReadSafeWriter,
-    RWLockFIFO, RWLockFIFOSafeWriter,
+    RWLockWrite, RWLockWriteReentrantWriter,
+    RWLockRead, RWLockReadReentrantWriter,
+    RWLockFIFO, RWLockFIFOReentrantWriter,
     RWLockBase
 )
 
@@ -107,11 +107,11 @@ class BaseRWLockTests:
             self.lock.read.release()
 
 
-class SafeWriterTestsMixin:
+class ReentrantWriterTestsMixin:
     def test_reentrant_write(self):
         with self.lock.write:
             success = self.lock.write.acquire(blocking=False)
-            self.assertTrue(success, "SafeWriter must allow nested writing from the same thread.")
+            self.assertTrue(success, "ReentrantWriter must allow nested writing from the same thread.")
             self.assertTrue(self.lock.write.locked())
             self.lock.write.release()
         self.assertFalse(self.lock.write.locked(), "Lock should be fully released after all nested context exits.")
@@ -191,20 +191,20 @@ class SafeWriterTestsMixin:
 class TestRWLockWrite(BaseRWLockTests, unittest.TestCase):
     lock_class = RWLockWrite
 
-class TestRWLockWriteSafeWriter(SafeWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
-    lock_class = RWLockWriteSafeWriter
+class TestRWLockWriteReentrantWriter(ReentrantWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
+    lock_class = RWLockWriteReentrantWriter
 
 class TestRWLockRead(BaseRWLockTests, unittest.TestCase):
     lock_class = RWLockRead
 
-class TestRWLockReadSafeWriter(SafeWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
-    lock_class = RWLockReadSafeWriter
+class TestRWLockReadReentrantWriter(ReentrantWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
+    lock_class = RWLockReadReentrantWriter
 
 class TestRWLockFIFO(BaseRWLockTests, unittest.TestCase):
     lock_class = RWLockFIFO
 
-class TestRWLockFIFOSafeWriter(SafeWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
-    lock_class = RWLockFIFOSafeWriter
+class TestRWLockFIFOReentrantWriter(ReentrantWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
+    lock_class = RWLockFIFOReentrantWriter
 
 if __name__ == '__main__':
     unittest.main()

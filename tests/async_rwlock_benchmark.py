@@ -5,9 +5,9 @@ from typing import Type, List
 
 from rwlocker.async_rwlock import (
     AsyncRWLockBase, 
-    AsyncRWLockWrite, AsyncRWLockWriteSafeWriter,
-    AsyncRWLockRead, AsyncRWLockReadSafeWriter,
-    AsyncRWLockFIFO, AsyncRWLockFIFOSafeWriter
+    AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
+    AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
+    AsyncRWLockFIFO, AsyncRWLockFIFOReentrantWriter
 )
 
 class AsyncStandardLockWrapper:
@@ -103,9 +103,9 @@ class AsyncExactBenchmarker:
 async def main():
     locks_to_test = [
         AsyncStandardLockWrapper,
-        AsyncRWLockWrite, AsyncRWLockWriteSafeWriter,
-        AsyncRWLockRead, AsyncRWLockReadSafeWriter,
-        AsyncRWLockFIFO, AsyncRWLockFIFOSafeWriter
+        AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
+        AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
+        AsyncRWLockFIFO, AsyncRWLockFIFOReentrantWriter
     ]
     
     engine = AsyncExactBenchmarker(locks_to_test)

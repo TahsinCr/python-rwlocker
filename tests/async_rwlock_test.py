@@ -3,9 +3,9 @@ import asyncio
 from typing import Type
 
 from rwlocker.async_rwlock import (
-    AsyncRWLockWrite, AsyncRWLockWriteSafeWriter,
-    AsyncRWLockRead, AsyncRWLockReadSafeWriter,
-    AsyncRWLockFIFO, AsyncRWLockFIFOSafeWriter,
+    AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
+    AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
+    AsyncRWLockFIFO, AsyncRWLockFIFOReentrantWriter,
     AsyncRWLockBase
 )
 
@@ -118,12 +118,12 @@ class BaseAsyncRWLockTests(unittest.IsolatedAsyncioTestCase):
             await self.lock.read.release()
 
 
-class SafeWriterAsyncTestsMixin:
+class ReentrantWriterAsyncTestsMixin:
     async def test_reentrant_write(self):
         if not self.lock_class: return
         async with self.lock.write:
             success = await self.lock.write.acquire(blocking=False)
-            self.assertTrue(success, "SafeWriter must allow nested writing from the same task.")
+            self.assertTrue(success, "ReentrantWriter must allow nested writing from the same task.")
             self.assertTrue(await self.lock.write.locked())
             await self.lock.write.release()
         self.assertFalse(await self.lock.write.locked(), "Lock should be fully released after all nested context exits.")
@@ -206,20 +206,20 @@ class SafeWriterAsyncTestsMixin:
 class TestAsyncRWLockWrite(BaseAsyncRWLockTests):
     lock_class = AsyncRWLockWrite
 
-class TestAsyncRWLockWriteSafeWriter(SafeWriterAsyncTestsMixin, BaseAsyncRWLockTests):
-    lock_class = AsyncRWLockWriteSafeWriter
+class TestAsyncRWLockWriteReentrantWriter(ReentrantWriterAsyncTestsMixin, BaseAsyncRWLockTests):
+    lock_class = AsyncRWLockWriteReentrantWriter
 
 class TestAsyncRWLockRead(BaseAsyncRWLockTests):
     lock_class = AsyncRWLockRead
 
-class TestAsyncRWLockReadSafeWriter(SafeWriterAsyncTestsMixin, BaseAsyncRWLockTests):
-    lock_class = AsyncRWLockReadSafeWriter
+class TestAsyncRWLockReadReentrantWriter(ReentrantWriterAsyncTestsMixin, BaseAsyncRWLockTests):
+    lock_class = AsyncRWLockReadReentrantWriter
 
 class TestAsyncRWLockFIFO(BaseAsyncRWLockTests):
     lock_class = AsyncRWLockFIFO
 
-class TestAsyncRWLockFIFOSafeWriter(SafeWriterAsyncTestsMixin, BaseAsyncRWLockTests):
-    lock_class = AsyncRWLockFIFOSafeWriter
+class TestAsyncRWLockFIFOReentrantWriter(ReentrantWriterAsyncTestsMixin, BaseAsyncRWLockTests):
+    lock_class = AsyncRWLockFIFOReentrantWriter
 
 
 if __name__ == '__main__':
