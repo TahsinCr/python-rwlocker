@@ -1,7 +1,7 @@
 import threading
 import time
 from collections import deque
-from rwlocker.thread_rwlock import RWLockFIFO, RWCondition
+from rwlocker.thread_rwlock import RWLockFair, RWCondition
 
 class ImageProcessingQueue:
     """
@@ -9,8 +9,8 @@ class ImageProcessingQueue:
     Demonstrates precise notification targeting `notify(n)`.
     """
     def __init__(self):
-        # FIFO lock ensures producers and consumers take strict turns
-        self._cond = RWCondition(RWLockFIFO())
+        # Fair lock ensures producers and consumers take strict turns
+        self._cond = RWCondition(RWLockFair())
         self._queue = deque()
 
     def add_jobs(self, jobs: list[str]) -> None:

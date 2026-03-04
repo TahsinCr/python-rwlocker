@@ -1,29 +1,27 @@
 import unittest
 import asyncio
-from typing import Type, Optional
+from typing import Type
 
 from rwlocker.async_rwlock import (
     AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
     AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
-    AsyncRWLockFIFO, AsyncRWLockFIFOReentrantWriter,
-    AsyncRWLockBase, AsyncRWCondition
+    AsyncRWLockFair, AsyncRWLockFairReentrantWriter,
+    AsyncRWLockBase, AsyncRWCondition, AsyncCondition
 )
 
-class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
+class BaseAsyncConditionTests:
     lock_class: Type[AsyncRWLockBase] = None
 
     async def asyncSetUp(self):
         if self.lock_class:
             self.lock = self.lock_class()
-            self.condition = AsyncRWCondition(self.lock)
+            self.condition = AsyncCondition(self.lock)
 
     async def test_initial_state(self):
-        if not self.lock_class: return
-        self.assertFalse(await self.condition.read.locked())
-        self.assertFalse(await self.condition.write.locked())
+        self.assertFalse(self.condition.read.locked())
+        self.assertFalse(self.condition.write.locked())
 
     async def test_wait_without_acquire_raises(self):
-        if not self.lock_class: return
         with self.assertRaises(RuntimeError, msg="Waiting on an un-acquired read condition should raise RuntimeError."):
             await self.condition.read.wait()
             
@@ -31,7 +29,6 @@ class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
             await self.condition.write.wait()
 
     async def test_notify_without_acquire_raises(self):
-        if not self.lock_class: return
         with self.assertRaises(RuntimeError, msg="Notifying on an un-acquired read condition should raise RuntimeError."):
             self.condition.read.notify()
             
@@ -39,7 +36,6 @@ class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
             self.condition.write.notify_all()
 
     async def test_wait_and_notify_single(self):
-        if not self.lock_class: return
         event_happened = False
         wait_success = False
 
@@ -62,7 +58,6 @@ class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(wait_success, "The waiter task should successfully wake up and evaluate the predicate.")
 
     async def test_notify_all_wakes_multiple_waiters(self):
-        if not self.lock_class: return
         wait_count = 0
         event_happened = False
 
@@ -83,7 +78,6 @@ class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wait_count, 5, "All waiting tasks should have been awoken by notify_all().")
 
     async def test_notify_n_wakes_specific_number_of_waiters(self):
-        if not self.lock_class: return
         wait_count = 0
 
         async def waiter_task():
@@ -113,7 +107,6 @@ class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wait_count, 4)
 
     async def test_wait_cancellation_safety(self):
-        if not self.lock_class: return
         """
         Verify that cancelling a waiting task does not corrupt the lock state
         and that the task re-acquires the lock before propagating the error.
@@ -130,12 +123,11 @@ class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
                 pass
         
         # The lock should be released and available for others
-        self.assertFalse(await self.condition.read.locked())
+        self.assertFalse(self.condition.read.locked())
         async with self.condition.write:
-            self.assertTrue(await self.condition.write.locked())
+            self.assertTrue(self.condition.write.locked())
 
     async def test_wait_for_timeout(self):
-        if not self.lock_class: return
         async with self.condition.read:
             start_time = asyncio.get_running_loop().time()
             success = True
@@ -149,38 +141,45 @@ class BaseAsyncRWConditionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(success, "wait_for should timeout when the predicate remains False.")
             self.assertGreaterEqual(elapsed, 0.09)
 
+class AsyncRWConditionTests(BaseAsyncConditionTests):
+    async def asyncSetUp(self):
+        if self.lock_class:
+            self.lock = self.lock_class()
+            self.condition = AsyncRWCondition(self.lock)
+
     async def test_downgrade_condition_release_safety(self):
-        if not self.lock_class: return
         """
         Verify that if the underlying Write proxy is downgraded, the Condition 
         Proxy routes the release logic correctly via the smart proxy.
         """
         async with self.condition.write:
-            await self.condition.write._lock_proxy.downgrade()
+            self.condition.write._lock_proxy.downgrade()
             # Smart Proxy should handle the __aexit__ release correctly
         
-        self.assertFalse(await self.condition.read.locked())
-        self.assertFalse(await self.condition.write.locked())
+        self.assertFalse(self.condition.read.locked())
+        self.assertFalse(self.condition.write.locked())
 
 
-class TestAsyncRWConditionWithWriteLock(BaseAsyncRWConditionTests):
+class TestAsyncRWConditionWithWriteLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockWrite
 
-class TestAsyncRWConditionWithWriteReentrantLock(BaseAsyncRWConditionTests):
+class TestAsyncRWConditionWithWriteReentrantLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockWriteReentrantWriter
 
-class TestAsyncRWConditionWithReadLock(BaseAsyncRWConditionTests):
+class TestAsyncRWConditionWithReadLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockRead
 
-class TestAsyncRWConditionWithReadReentrantLock(BaseAsyncRWConditionTests):
+class TestAsyncRWConditionWithReadReentrantLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockReadReentrantWriter
 
-class TestAsyncRWConditionWithFIFOLock(BaseAsyncRWConditionTests):
-    lock_class = AsyncRWLockFIFO
+class TestAsyncRWConditionWithFairLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = AsyncRWLockFair
 
-class TestAsyncRWConditionWithFIFOReentrantLock(BaseAsyncRWConditionTests):
-    lock_class = AsyncRWLockFIFOReentrantWriter
+class TestAsyncRWConditionWithFairReentrantLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = AsyncRWLockFairReentrantWriter
 
+class TestAsyncCondition(BaseAsyncConditionTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = asyncio.Lock
 
 if __name__ == '__main__':
     unittest.main()

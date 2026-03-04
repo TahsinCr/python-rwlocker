@@ -4,7 +4,7 @@ Advanced Asynchronous Read-Write Lock (AsyncRWLock) and Condition Concurrency Pr
 This module provides highly optimized, state-machine-based Read-Write locks 
 and their corresponding Condition variables. It is designed specifically for 
 Python's `asyncio` event loop, supporting different scheduling strategies 
-(Write-preferring, Read-preferring, FIFO) and safe reentrancy for writer tasks.
+(Write-preferring, Read-preferring, Fair) and safe reentrancy for writer tasks.
 
 Architecture Notes:
     - **Smart Proxies**: The locks and conditions are interacted with via 
@@ -14,15 +14,23 @@ Architecture Notes:
       an `asyncio.Future` and `deque` architecture to provide highly efficient 
       wait/notify operations, eliminating event loop blocking and providing 
       strict protection against cache stampedes.
-    - **Circular References**: The base classes (`AsyncRWLockBase`, `AsyncRWConditionBase`) 
+    - **Adapter Pattern & Solid Base**: Standard asyncio Locks and Conditions 
+      are encapsulated via `AsyncLock` and `AsyncCondition` adapters, sharing the 
+      exact same API signatures as AsyncRWLocks for seamless dependency injection.
+    - **Circular References**: The base classes (`AsyncRWLockWithProxyBase`, `AsyncRWConditionWithProxyBase`) 
       hold references to their respective `read` and `write` proxies, and the 
       proxies hold a reference back to the base. This circular dependency is 
-      resolved by Python's Garbage Collector. Do not rely on `__del__` for 
-      deterministic cleanup.
+      resolved by Python's Garbage Collector.
     - **Cancellation Safety & Task Tracking**: Standard lock acquisition and wait 
       operations use `asyncio.current_task()` for O(1) identity tracking. All 
       state transitions are fully resilient to `asyncio.CancelledError`, strictly 
       preventing deadlocks and state corruption during task cancellations.
+    - **Drop-in Replacement**: All AsyncRWLock and AsyncRWCondition objects 
+      fully implement the standard `asyncio.Lock` and `asyncio.Condition` 
+      interfaces directly on the base instance. Calling standard methods 
+      (e.g., `await acquire()`, `await wait()`) automatically routes to the 
+      exclusive `write` proxy, ensuring 100% backward compatibility with 
+      legacy async code and third-party libraries.
 """
 import asyncio
 from collections import deque
@@ -30,23 +38,24 @@ from abc import ABC, abstractmethod
 from typing import Callable, Protocol, Optional
 from types import TracebackType
 
-__version__ = '2.0'
+__version__ = '3.0'
 __all__ = (
-    'AsyncLockable', 'AsyncLockDowngradable', 'AsyncRWLockBase', 'AsyncRWConditionBase', 
+    'AsyncLockable', 'AsyncLockDowngradable', 'AsyncRWLockBase', 'AsyncRWLockWithProxyBase', 
     'AsyncRWLockProxy', 'AsyncRWLockReaderProxy', 'AsyncRWLockWriterProxy',
     'AsyncRWLockWrite', 'AsyncRWLockWriteReentrantWriter', 
     'AsyncRWLockRead', 'AsyncRWLockReadReentrantWriter',
-    'AsyncRWLockFIFO', 'AsyncRWLockFIFOReentrantWriter',
+    'AsyncRWLockFair', 'AsyncRWLockFairReentrantWriter',
+    'AsyncConditionLockable', 'AsyncConditionDowngradable', 'AsyncRWConditionBase', 'AsyncRWConditionWithProxyBase',
     'AsyncRWConditionProxy', 'AsyncRWConditionReaderProxy', 'AsyncRWConditionWriterProxy',
-    'AsyncRWCondition'
+    'AsyncRWCondition', 'AsyncLock', 'AsyncCondition'
 )
 
-# Protocol and Base
+# RWLock Protocol and Base
 class AsyncLockable(Protocol):
     """Protocol defining a standard asyncio-compatible lock interface."""
-    async def acquire(self, blocking: bool = True) -> bool: ...
-    async def release(self) -> None: ...
-    async def locked(self) -> bool: ...
+    async def acquire(self) -> bool: ...
+    def release(self) -> None: ...
+    def locked(self) -> bool: ...
     async def __aenter__(self) -> bool: ...
     async def __aexit__(self, 
         exc_type: Optional[type[BaseException]], 
@@ -56,28 +65,65 @@ class AsyncLockable(Protocol):
 
 class AsyncLockDowngradable(AsyncLockable):
     """Protocol for async locks that support atomic state degradation (Write -> Read)."""
-    async def downgrade(self) -> None: ...
+    def downgrade(self) -> None: ...
 
 class AsyncRWLockBase(ABC):
     """
-    Abstract base class for all asynchronous Read-Write lock implementations.
-
-    Manages the core `asyncio.Lock`, active reader counters, and constructs the
-    read/write proxy managers.
-
-    Warning:
-        This class forms a circular reference with `AsyncRWLockReaderProxy` and 
-        `AsyncRWLockWriterProxy`. Memory is reclaimed via the GC.
+    Absolute base class establishing the core Asynchronous Read-Write interface.
+    
+    Provides the foundational `.read` and `.write` attributes. Furthermore, it 
+    acts as a drop-in replacement for `asyncio.Lock` by exposing standard async 
+    methods (`acquire`, `release`, etc.) that default to the exclusive `.write` 
+    proxy. Designed to act as a common type hint and contract.
     """
-    __slots__ = ('_lock', '_readers_active', 'read', 'write')
-    def __init__(self, lock_factory: Callable[[], asyncio.Lock] = asyncio.Lock):
-        self._lock = lock_factory()
-        self._readers_active = 0
-        self.read: 'AsyncRWLockReaderProxy' = AsyncRWLockReaderProxy(rwlock=self)
-        self.write: 'AsyncRWLockWriterProxy' = AsyncRWLockWriterProxy(rwlock=self)
+    __slots__ = ('read', 'write')
+    def __init__(self):
+        self.read: AsyncLockable = asyncio.Lock()
+        self.write: AsyncLockable = self.read
 
     def _is_read_locked(self) -> bool:
-        return self._readers_active > 0
+        return self.read.locked()
+    
+    def _is_write_locked(self) -> bool:
+        return self.write.locked()
+    
+    async def acquire(self) -> bool:
+        """
+        Acquire the exclusive (write) asynchronous lock.
+        Provides standard asyncio.Lock compatibility by routing to the write proxy.
+        """
+        return await self.write.acquire()
+
+    def release(self) -> None:
+        """
+        Release the exclusive (write) asynchronous lock.
+        """
+        self.write.release()
+    
+    def locked(self) -> bool:
+        """
+        Check if the exclusive (write) asynchronous lock is currently held.
+        """
+        return self.write.locked()
+    
+    async def __aenter__(self) -> bool:
+        return await self.write.__aenter__()
+    
+    async def __exit__(self, exc_type, exc_val, exc_tb) -> Optional[bool]:
+        return await self.write.__exit__(exc_type, exc_val, exc_tb)
+
+class AsyncRWLockWithProxyBase(AsyncRWLockBase):
+    """
+    Abstract base class for all proxy-based asynchronous Read-Write lock implementations.
+
+    This class manages the core `asyncio.Lock` and initializes the Smart Proxy Pattern, 
+    exposing `read` and `write` attributes as proxy instances that safely handle 
+    task cancellation and route logic to the overridden internal core methods.
+    """
+    __slots__ = ()
+    def __init__(self):
+        self.read:AsyncRWLockReaderProxy = AsyncRWLockReaderProxy(rwlock=self)
+        self.write:AsyncRWLockWriterProxy = AsyncRWLockWriterProxy(rwlock=self)
 
     @abstractmethod
     def _can_read(self) -> bool: ...
@@ -97,58 +143,62 @@ class AsyncRWLockBase(ABC):
     def _downgrade_core(self) -> None: ...
     @abstractmethod
     def _on_writer_abort(self) -> None: ...
-    @abstractmethod
-    def _is_write_locked(self) -> bool: ...
-
-class AsyncRWConditionBase(ABC):
-    """
-    Abstract base class for all asynchronous Read-Write Condition variables.
-    
-    Like AsyncRWLockBase, it strictly hides its internal mechanisms and exposes 
-    its functionality via `.read` and `.write` proxies to maintain a clean, 
-    standardized asyncio.Condition API.
-    """
-    __slots__ = ('_rwlock', 'read', 'write')
-    
-    def __init__(self, rwlock: 'AsyncRWLockBase'):
-        self._rwlock = rwlock
-        self.read: 'AsyncRWConditionReaderProxy' = AsyncRWConditionReaderProxy(rwcond=self)
-        self.write: 'AsyncRWConditionWriterProxy' = AsyncRWConditionWriterProxy(rwcond=self)
-
-    @abstractmethod
-    def _is_owned_read(self) -> bool: ...
-    @abstractmethod
-    def _is_owned_write(self) -> bool: ...
-    @abstractmethod
-    def _add_waiter(self) -> asyncio.Future: ...
-    @abstractmethod
-    def _remove_waiter(self, waiter: asyncio.Future) -> None: ...
-    @abstractmethod
-    def _notify_core(self, n: int) -> None: ...
-    @abstractmethod
-    def _notify_all_core(self) -> None: ...
 
 # Read and Write Lock Proxy
+class _AsyncWaitQueue:
+    """Internal O(1) wait queue replacing asyncio.Condition for micro-locks."""
+    __slots__ = ('_waiters',)
+    def __init__(self):
+        self._waiters: deque[asyncio.Future] = deque()
+        
+    async def wait(self):
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._waiters.append(fut)
+        try:
+            await fut
+        except asyncio.CancelledError:
+            try:
+                self._waiters.remove(fut)
+            except ValueError:
+                pass
+            raise
+
+    def notify(self, n: int = 1):
+        waiters = self._waiters
+        count = 0
+        while waiters and count < n:
+            fut = waiters.popleft()
+            if not fut.done():
+                fut.set_result(True)
+                count += 1
+    
+    def notify_all(self):
+        waiters = self._waiters
+        if not waiters:
+            return
+        for fut in waiters:
+            if not fut.done():
+                fut.set_result(True)
+
 class AsyncRWLockProxy:
     """
     Base proxy class acting as a standard `asyncio.Lock` interface.
     Handles acquisition logic, event loop yielding (`wait()`), and cancellation.
     """
     __slots__ = (
-        '_lock', 'those_waiting', 'condition', '_can_acquire',
+        'those_waiting', 'condition', '_can_acquire',
         '_acquire_core', '_release_core', '_on_abort', '_is_locked'
     )  
-    def __init__(self, 
-        lock: asyncio.Lock, 
+    def __init__(self,  
         can_acquire: Callable[[], bool],
         acquire_core: Callable[[], None],
         release_core: Callable[[], None],
         on_abort: Callable[[], None],
         is_locked: Callable[[], bool],
     ):
-        self._lock = lock
         self.those_waiting = 0
-        self.condition = asyncio.Condition(self._lock)
+        self.condition = _AsyncWaitQueue()
         
         self._can_acquire = can_acquire
         self._acquire_core = acquire_core
@@ -165,49 +215,45 @@ class AsyncRWLockProxy:
             the `finally` block ensures the wait counter is decremented and other
             tasks are properly notified via `_on_abort()`.
         """
-        async with self._lock:
-            if self._can_acquire():
-                self._acquire_core()
-                return True
-            if not blocking:
-                return False
-            self.those_waiting += 1
-            acquired = False
-            try:
-                while not self._can_acquire():
-                    await self.condition.wait()
-                self._acquire_core()
-                acquired = True
-                return True
-            finally:
-                self.those_waiting -= 1
-                if not acquired:
-                    self._on_abort()
+        if self._can_acquire():
+            self._acquire_core()
+            return True
+        if not blocking:
+            return False
+        self.those_waiting += 1
+        acquired = False
+        try:
+            while not self._can_acquire():
+                await self.condition.wait()
+            self._acquire_core()
+            acquired = True
+            return True
+        finally:
+            self.those_waiting -= 1
+            if not acquired:
+                self._on_abort()
 
-    async def release(self) -> None:
+    def release(self) -> None:
         """Release the acquired lock and notify waiting tasks synchronously."""
-        async with self._lock:
-            self._release_core()
+        self._release_core()
 
-    async def locked(self) -> bool:
+    def locked(self) -> bool:
         """Check if the lock is currently held."""
-        async with self._lock:
-            return self._is_locked()
+        return self._is_locked()
 
     async def __aenter__(self) -> bool:
         await self.acquire()
         return True
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> Optional[bool]:
-        await self.release()
+        self.release()
         return False
 
 class AsyncRWLockReaderProxy(AsyncRWLockProxy):
     """Proxy specifically handling Reader logic for asyncio."""
     __slots__ = ()
-    def __init__(self, rwlock: AsyncRWLockBase):
+    def __init__(self, rwlock: AsyncRWLockWithProxyBase):
         super().__init__(
-            lock=rwlock._lock,
             can_acquire=rwlock._can_read,
             acquire_core=rwlock._acquire_read_core,
             release_core=rwlock._release_read_core,
@@ -221,9 +267,8 @@ class AsyncRWLockWriterProxy(AsyncRWLockProxy):
     atomic state degradation (Smart Proxy).
     """
     __slots__ = ('_read_lock', '_downgrade_core', '_downgraded_tasks')
-    def __init__(self, rwlock: AsyncRWLockBase):
+    def __init__(self, rwlock: AsyncRWLockWithProxyBase):
         super().__init__(
-            lock=rwlock._lock,
             can_acquire=rwlock._can_write,
             acquire_core=rwlock._acquire_write_core,
             release_core=rwlock._release_write_core,
@@ -234,7 +279,7 @@ class AsyncRWLockWriterProxy(AsyncRWLockProxy):
         self._downgrade_core = rwlock._downgrade_core
         self._downgraded_tasks:set[asyncio.Task] = set()
             
-    async def downgrade(self):
+    def downgrade(self):
         """
         Atomically transition the held Write lock into a Read lock.
         Allows nested usage within `async with lock.write` blocks.
@@ -244,27 +289,25 @@ class AsyncRWLockWriterProxy(AsyncRWLockProxy):
             This incurs a minor memory footprint and an O(1) hash lookup 
             during the subsequent `release()` call.
         """
-        async with self._lock:
-            self._downgrade_core()
-            self._downgraded_tasks.add(asyncio.current_task())
+        self._downgrade_core()
+        self._downgraded_tasks.add(asyncio.current_task())
     
-    async def release(self):
+    def release(self):
         """
         Release the lock intelligently.
         Checks if the current task downgraded the lock earlier. If so, it routes
         the release logic to the reader core, avoiding Deadlocks and RuntimeErrors.
         """
-        async with self._lock:
-            if self._downgraded_tasks: 
-                task = asyncio.current_task()
-                if task in self._downgraded_tasks:
-                    self._downgraded_tasks.remove(task)
-                    self._read_lock._release_core()
-                    return
-            self._release_core()
+        if self._downgraded_tasks: 
+            task = asyncio.current_task()
+            if task in self._downgraded_tasks:
+                self._downgraded_tasks.remove(task)
+                self._read_lock._release_core()
+                return
+        self._release_core()
 
-#  Read and Write Lock
-class AsyncRWLockWrite(AsyncRWLockBase):
+# Read and Write Lock
+class AsyncRWLockWrite(AsyncRWLockWithProxyBase):
     """
     Write-preferring Asynchronous Read-Write Lock.
     
@@ -284,11 +327,22 @@ class AsyncRWLockWrite(AsyncRWLockBase):
         async with lock.write:
             print("Updating data...")
         ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        lock = AsyncRWLockWrite()
+        
+        # By using the lock instance directly, it automatically routes to the 
+        # exclusive (write) proxy. This allows the AsyncRWLock to be safely injected 
+        # into legacy code that only understands standard asyncio.Lock.
+        async with lock:
+            print("Exclusive write lock acquired via direct standard API.")
+        ```
     """
-    __slots__ = ('_writer_active',)
-    def __init__(self, lock_factory: Callable[[], asyncio.Lock] = asyncio.Lock):
-        super().__init__(lock_factory)
+    __slots__ = ('_writer_active', '_readers_active')
+    def __init__(self):
+        super().__init__()
         self._writer_active = False
+        self._readers_active = 0
 
     def _can_read(self) -> bool:
         return not self._writer_active and self.write.those_waiting == 0
@@ -333,6 +387,9 @@ class AsyncRWLockWrite(AsyncRWLockBase):
 
     def _is_write_locked(self) -> bool: 
         return self._writer_active
+    
+    def _is_read_locked(self) -> bool:
+        return self._readers_active > 0
 
 class AsyncRWLockWriteReentrantWriter(AsyncRWLockWrite):
     """
@@ -359,11 +416,21 @@ class AsyncRWLockWriteReentrantWriter(AsyncRWLockWrite):
             await lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        lock = AsyncRWLockWriteReentrantWriter()
+        
+        # By using the lock instance directly, it automatically routes to the 
+        # exclusive (write) proxy. This allows the AsyncRWLock to be safely injected 
+        # into legacy code that only understands standard asyncio.Lock.
+        async with lock:
+            print("Exclusive write lock acquired via direct standard API.")
+        ```
     """
     __slots__ = ('_writer_id', '_write_count')
 
-    def __init__(self, lock_factory: Callable[[], asyncio.Lock] = asyncio.Lock):
-        super().__init__(lock_factory)
+    def __init__(self):
+        super().__init__()
         self._writer_id: Optional[asyncio.Task] = None
         self._write_count: int = 0
 
@@ -400,7 +467,7 @@ class AsyncRWLockWriteReentrantWriter(AsyncRWLockWrite):
     def _is_write_locked(self) -> bool: 
         return self._writer_id is not None
 
-class AsyncRWLockRead(AsyncRWLockBase):
+class AsyncRWLockRead(AsyncRWLockWithProxyBase):
     """
     Read-preferring Asynchronous Read-Write Lock.
     
@@ -420,11 +487,22 @@ class AsyncRWLockRead(AsyncRWLockBase):
         async with lock.write:
             print("Updating data...")
         ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        lock = AsyncRWLockRead()
+        
+        # By using the lock instance directly, it automatically routes to the 
+        # exclusive (write) proxy. This allows the AsyncRWLock to be safely injected 
+        # into legacy code that only understands standard asyncio.Lock.
+        async with lock:
+            print("Exclusive write lock acquired via direct standard API.")
+        ```
     """
-    __slots__ = ('_writer_active',)
-    def __init__(self, lock_factory: Callable[[], asyncio.Lock] = asyncio.Lock):
-        super().__init__(lock_factory)
+    __slots__ = ('_writer_active', '_readers_active')
+    def __init__(self):
+        super().__init__()
         self._writer_active = False
+        self._readers_active = 0
 
     def _can_read(self) -> bool:
         return not self._writer_active
@@ -469,6 +547,9 @@ class AsyncRWLockRead(AsyncRWLockBase):
 
     def _is_write_locked(self) -> bool: 
         return self._writer_active
+    
+    def _is_read_locked(self) -> bool:
+        return self._readers_active > 0
 
 class AsyncRWLockReadReentrantWriter(AsyncRWLockRead):
     """
@@ -493,11 +574,21 @@ class AsyncRWLockReadReentrantWriter(AsyncRWLockRead):
             await lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        lock = AsyncRWLockReadReentrantWriter()
+        
+        # By using the lock instance directly, it automatically routes to the 
+        # exclusive (write) proxy. This allows the AsyncRWLock to be safely injected 
+        # into legacy code that only understands standard asyncio.Lock.
+        async with lock:
+            print("Exclusive write lock acquired via direct standard API.")
+        ```
     """
     __slots__ = ('_writer_id', '_write_count')
 
-    def __init__(self, lock_factory: Callable[[], asyncio.Lock] = asyncio.Lock):
-        super().__init__(lock_factory)
+    def __init__(self):
+        super().__init__()
         self._writer_id: Optional[asyncio.Task] = None
         self._write_count: int = 0
 
@@ -534,7 +625,7 @@ class AsyncRWLockReadReentrantWriter(AsyncRWLockRead):
     def _is_write_locked(self) -> bool:
         return self._writer_id is not None
 
-class AsyncRWLockFIFO(AsyncRWLockBase):
+class AsyncRWLockFair(AsyncRWLockWithProxyBase):
     """
     Fair (First-In-First-Out) Asynchronous Read-Write Lock.
     
@@ -543,7 +634,7 @@ class AsyncRWLockFIFO(AsyncRWLockBase):
 
     Example:
         ```python
-        lock = AsyncRWLockFIFO()
+        lock = AsyncRWLockFair()
         
         # Readers and writers are served strictly in the order they arrive,
         # ensuring zero starvation for both sides.
@@ -553,13 +644,24 @@ class AsyncRWLockFIFO(AsyncRWLockBase):
         async with lock.write:
             print("Updating data...")
         ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        lock = AsyncRWLockFair()
+        
+        # By using the lock instance directly, it automatically routes to the 
+        # exclusive (write) proxy. This allows the AsyncRWLock to be safely injected 
+        # into legacy code that only understands standard asyncio.Lock.
+        async with lock:
+            print("Exclusive write lock acquired via direct standard API.")
+        ```
     """
-    __slots__ = ('_writer_active', '_readers_turn')
+    __slots__ = ('_writer_active', '_readers_turn', '_readers_active')
 
-    def __init__(self, lock_factory: Callable[[], asyncio.Lock] = asyncio.Lock):
-        super().__init__(lock_factory)
+    def __init__(self):
+        super().__init__()
         self._writer_active = False
         self._readers_turn = False
+        self._readers_active = 0
 
     def _can_read(self) -> bool:
         if self._writer_active: 
@@ -615,8 +717,11 @@ class AsyncRWLockFIFO(AsyncRWLockBase):
 
     def _is_write_locked(self) -> bool:
         return self._writer_active
+    
+    def _is_read_locked(self) -> bool:
+        return self._readers_active > 0
 
-class AsyncRWLockFIFOReentrantWriter(AsyncRWLockFIFO):
+class AsyncRWLockFairReentrantWriter(AsyncRWLockFair):
     """
     Fair (First-In-First-Out) Asynchronous Read-Write Lock with Task-Reentrancy.
     
@@ -625,7 +730,7 @@ class AsyncRWLockFIFOReentrantWriter(AsyncRWLockFIFO):
     
     Example:
         ```python
-        lock = AsyncRWLockFIFOReentrantWriter()
+        lock = AsyncRWLockFairReentrantWriter()
         
         async with lock.write:
             print("Outer write lock acquired.")
@@ -639,11 +744,21 @@ class AsyncRWLockFIFOReentrantWriter(AsyncRWLockFIFO):
             await lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        lock = AsyncRWLockFairReentrantWriter()
+        
+        # By using the lock instance directly, it automatically routes to the 
+        # exclusive (write) proxy. This allows the AsyncRWLock to be safely injected 
+        # into legacy code that only understands standard asyncio.Lock.
+        async with lock:
+            print("Exclusive write lock acquired via direct standard API.")
+        ```
     """
     __slots__ = ('_writer_id', '_write_count')
 
-    def __init__(self, lock_factory: Callable[[], asyncio.Lock] = asyncio.Lock):
-        super().__init__(lock_factory)
+    def __init__(self):
+        super().__init__()
         self._writer_id: Optional[asyncio.Task] = None
         self._write_count: int = 0
 
@@ -689,6 +804,148 @@ class AsyncRWLockFIFOReentrantWriter(AsyncRWLockFIFO):
     def _is_write_locked(self) -> bool:
         return self._writer_id is not None
 
+# Standart Lock Adapter
+class AsyncLock(AsyncRWLockBase):
+    """
+    Adapter class for the standard `asyncio.Lock`.
+    
+    Wraps the standard asyncio lock to conform to the `AsyncRWLockBase` interface, 
+    exposing it via both `.read` and `.write` attributes. Useful for dependency 
+    injection where an AsyncRWLock signature is required, but a standard lock is sufficient.
+
+    Example:
+        ```python
+        lock = AsyncLock()
+        
+        # Both .read and .write point to the same standard asyncio.Lock
+        async with lock.read:
+            print("Reading with standard async lock...")
+            
+        async with lock.write:
+            print("Writing with standard async lock...")
+        ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        lock = AsyncLock()
+        
+        # Acts exactly like a standard asyncio.Lock.
+        # Perfect for passing into third-party libraries expecting a standard async lock.
+        async with lock:
+            print("Standard async lock acquired directly without proxies.")
+        ```
+    """
+    __slots__ = ()
+
+
+
+# RWCondition Protocol and Base
+class AsyncConditionLockable(AsyncLockable):
+    """Protocol defining a standard asyncio-compatible Condition variable interface."""
+    async def wait(self) -> bool: ...
+    async def wait_for(self, predicate: Callable[[], bool]) -> bool: ...
+    def notify(self, n: int = 1) -> None: ...
+    def notify_all(self) -> None: ...
+
+class AsyncConditionDowngradable(AsyncConditionLockable):
+    """Protocol for async condition variables that support atomic state degradation (Write -> Read)."""
+    def downgrade(self) -> None: ...
+
+class AsyncRWConditionBase(ABC):
+    """
+    Absolute base class establishing the core Asynchronous Read-Write Condition interface.
+    
+    Provides the foundational `.read` and `.write` attributes. Furthermore, it 
+    acts as a drop-in replacement for `asyncio.Condition` by exposing standard 
+    condition methods (`wait`, `notify`, etc.) that default to the exclusive 
+    `.write` proxy. Designed to act as a common type hint and contract.
+    """
+    __slots__ = ('_lock', 'read', 'write')
+
+    def __init__(self, lock: Optional[AsyncRWLockBase] = None):
+        self._lock = AsyncLock() if lock is None else lock
+        self.write: AsyncConditionLockable = asyncio.Condition(self._lock)
+        self.read: AsyncConditionLockable = self.write
+    
+    async def acquire(self) -> bool:
+        """
+        Acquire the underlying exclusive (write) asynchronous lock.
+        """
+        return await self.write.acquire()
+
+    def release(self) -> None:
+        """
+        Release the underlying exclusive (write) asynchronous lock.
+        """
+        self.write.release()
+
+    def locked(self) -> bool:
+        """
+        Check if the underlying exclusive (write) asynchronous lock is currently held.
+        """
+        return self.write.locked()
+    
+    async def wait(self) -> bool:
+        """
+        Wait until notified.
+        Provides standard asyncio.Condition compatibility by routing to the write proxy.
+        """
+        return await self.write.wait()
+
+    async def wait_for(self, predicate: Callable[[], bool]) -> bool:
+        """
+        Wait until a specific condition (predicate) evaluates to True.
+        Routes to the exclusive write proxy.
+        """
+        return await self.write.wait_for(predicate)
+    
+    def notify(self, n: int = 1) -> None:
+        """
+        Wake up one or more tasks waiting on this condition.
+        Routes to the exclusive write proxy.
+        """
+        self.write.notify(n)
+
+    def notify_all(self) -> None:
+        """
+        Wake up all tasks currently waiting on this condition.
+        Routes to the exclusive write proxy.
+        """
+        self.write.notify_all()
+    
+    async def __aenter__(self) -> bool:
+        return await self.write.__aenter__()
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> Optional[bool]:
+        return await self.write.__aexit__(exc_type, exc_val, exc_tb)
+    
+class AsyncRWConditionWithProxyBase(AsyncRWConditionBase):
+    """
+    Abstract base class for proxy-based Asynchronous Read-Write Condition variables.
+    
+    This class solely defines the internal state machine and core queuing 
+    operations. It strictly hides its internal mechanisms and exposes its 
+    functionality via `.read` and `.write` proxies to maintain a clean, 
+    standardized `asyncio.Condition` API resilient to task cancellations.
+    """
+    __slots__ = ()
+    def __init__(self, lock: Optional[AsyncRWLockBase] = None):
+        self._lock = AsyncRWLockWrite() if lock is None else lock
+        self.read: AsyncRWConditionReaderProxy = AsyncRWConditionReaderProxy(rwcond=self)
+        self.write: AsyncRWConditionWriterProxy = AsyncRWConditionWriterProxy(rwcond=self)
+
+    @abstractmethod
+    def _is_owned_read(self) -> bool: ...
+    @abstractmethod
+    def _is_owned_write(self) -> bool: ...
+    @abstractmethod
+    def _add_waiter(self) -> asyncio.Future: ...
+    @abstractmethod
+    def _remove_waiter(self, waiter: asyncio.Future) -> None: ...
+    @abstractmethod
+    def _notify_core(self, n: int) -> None: ...
+    @abstractmethod
+    def _notify_all_core(self) -> None: ...
+
 # Read Write Lock Proxy For Condition
 class AsyncRWConditionProxy:
     """
@@ -732,7 +989,7 @@ class AsyncRWConditionProxy:
         """
         return await self._lock_proxy.acquire(blocking)
 
-    async def release(self) -> None:
+    def release(self) -> None:
         """
         Release the underlying asynchronous lock (Read or Write).
         
@@ -740,16 +997,16 @@ class AsyncRWConditionProxy:
             RuntimeError: If the lock was not acquired by the current task before 
                           calling this method.
         """
-        await self._lock_proxy.release()
+        self._lock_proxy.release()
 
-    async def locked(self) -> bool:
+    def locked(self) -> bool:
         """
         Check if the underlying lock is currently held.
 
         Returns:
             bool: True if the lock is acquired by any task, False otherwise.
         """
-        return await self._lock_proxy.locked()
+        return self._lock_proxy.locked()
 
     async def __aenter__(self) -> bool:
         return await self._lock_proxy.__aenter__()
@@ -780,14 +1037,17 @@ class AsyncRWConditionProxy:
             raise RuntimeError("cannot wait on un-acquired lock")
             
         waiter = self._add_waiter()
-        await self.release()
+        self.release()
         
         try:
             await waiter
             return True
-        finally:
+        except asyncio.CancelledError:
+            # OPTİMİZASYON: Mutlu Yolda çalışmaz.
+            # Sadece task iptal edilirse kuyruktan temizlik yapar.
             self._remove_waiter(waiter)
-            
+            raise
+        finally:
             # Critical asyncio section: Shield the re-acquisition loop from 
             # cancellation to prevent permanent deadlock / state corruption.
             err = None
@@ -864,9 +1124,9 @@ class AsyncRWConditionReaderProxy(AsyncRWConditionProxy):
     in the event loop.
     """
     __slots__ = ()
-    def __init__(self, rwcond: AsyncRWConditionBase):
+    def __init__(self, rwcond: AsyncRWConditionWithProxyBase):
         super().__init__(
-            lock_proxy=rwcond._rwlock.read,
+            lock_proxy=rwcond._lock.read,
             is_owned=rwcond._is_owned_read,
             add_waiter=rwcond._add_waiter,
             remove_waiter=rwcond._remove_waiter,
@@ -883,18 +1143,27 @@ class AsyncRWConditionWriterProxy(AsyncRWConditionProxy):
     in the event loop.
     """
     __slots__ = ()
-    def __init__(self, rwcond: AsyncRWConditionBase):
+    def __init__(self, rwcond: AsyncRWConditionWithProxyBase):
         super().__init__(
-            lock_proxy=rwcond._rwlock.write,
+            lock_proxy=rwcond._lock.write,
             is_owned=rwcond._is_owned_write,
             add_waiter=rwcond._add_waiter,
             remove_waiter=rwcond._remove_waiter,
             notify_core=rwcond._notify_core,
             notify_all_core=rwcond._notify_all_core
         )
+    
+    def downgrade(self) -> None:
+        """
+        Atomically transition the underlying asynchronous Write lock into a Read lock.
+        
+        This passes the downgrade request directly to the underlying async lock proxy,
+        allowing waiting readers to enter while maintaining the condition context.
+        """
+        self._lock_proxy.downgrade()
 
 # Read Write Lock For Condition
-class AsyncRWCondition(AsyncRWConditionBase):
+class AsyncRWCondition(AsyncRWConditionWithProxyBase):
     """
     Standard implementation of an Asynchronous Read-Write Condition variable.
     
@@ -906,7 +1175,7 @@ class AsyncRWCondition(AsyncRWConditionBase):
 
     Example:
         ```python
-        cond = AsyncRWCondition(AsyncRWLockFIFO())
+        cond = AsyncRWCondition()  # AsyncRWLockWrite default lock
         
         # Reader task
         async with cond.read:
@@ -918,21 +1187,30 @@ class AsyncRWCondition(AsyncRWConditionBase):
             data_ready = True
             cond.write.notify_all()
         ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        cond = AsyncRWCondition()  # AsyncRWLockWrite default lock
+        
+        # Direct usage bypasses explicit .read/.write proxies and defaults to 
+        # the exclusive write state, providing 100% API compatibility with 
+        # standard asyncio.Condition workflows.
+        async with cond:
+            while not data_ready:
+                await cond.wait()
+            cond.notify_all()
+        ```
     """
     __slots__ = ('_waiters',)
     
-    def __init__(self, rwlock: Optional['AsyncRWLockBase'] = None):
-        if rwlock is None:
-            rwlock = AsyncRWLockWrite() 
-            
+    def __init__(self, lock: Optional[AsyncRWLockBase] = None):   
         self._waiters: deque[asyncio.Future] = deque()
-        super().__init__(rwlock)
+        super().__init__(lock)
     
     def _is_owned_read(self) -> bool:
-        return self._rwlock._is_read_locked()
+        return self._lock._is_read_locked()
 
     def _is_owned_write(self) -> bool:
-        return self._rwlock._is_write_locked()
+        return self._lock._is_write_locked()
 
     def _add_waiter(self) -> asyncio.Future:
         loop = asyncio.get_running_loop()
@@ -947,12 +1225,56 @@ class AsyncRWCondition(AsyncRWConditionBase):
             pass
 
     def _notify_core(self, n: int) -> None:
+        waiters = self._waiters
         count = 0
-        while self._waiters and count < n:
-            waiter = self._waiters.popleft()
+        while waiters and count < n:
+            waiter = waiters.popleft()
             if not waiter.done():
                 waiter.set_result(True)
                 count += 1
 
     def _notify_all_core(self) -> None:
-        self._notify_core(len(self._waiters))
+        waiters = self._waiters
+        if not waiters:
+            return
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(True)
+        waiters.clear()
+
+# Standart Condition Adapter
+class AsyncCondition(AsyncRWConditionBase):
+    """
+    Adapter class for the standard `asyncio.Condition`.
+    
+    Wraps the standard asyncio condition to conform to the `AsyncRWConditionBase` 
+    interface. Both `.read` and `.write` attributes point to the same standard 
+    condition instance. Cannot be initialized with proxy-based complex AsyncRWLocks.
+
+    Example:
+        ```python
+        cond = AsyncCondition()
+        
+        # Both .read and .write point to the same standard asyncio.Condition
+        async with cond.read:
+            await cond.read.wait_for(lambda: data_ready)
+            
+        async with cond.write:
+            data_ready = True
+            cond.write.notify_all()
+        ```
+    Example 2 (Drop-in Replacement):
+        ```python
+        cond = AsyncCondition()
+        
+        # Functions identically to asyncio.Condition.
+        async with cond:
+            await cond.wait_for(lambda: data_ready)
+            cond.notify()
+        ```
+    """
+    __slots__ = ()
+    def __init__(self, lock: Optional[AsyncRWLockBase] = None):
+        if lock is not None and isinstance(lock, AsyncRWLockWithProxyBase):
+            raise TypeError("Standard 'AsyncCondition' adapters cannot be used with proxy-based RWLocks. Use 'AsyncRWCondition' instead.")
+        super().__init__(lock)

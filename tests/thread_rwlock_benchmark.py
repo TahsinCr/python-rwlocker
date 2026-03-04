@@ -7,7 +7,7 @@ from rwlocker.thread_rwlock import (
     RWLockBase, 
     RWLockWrite, RWLockWriteReentrantWriter,
     RWLockRead, RWLockReadReentrantWriter,
-    RWLockFIFO, RWLockFIFOReentrantWriter
+    RWLockFair, RWLockFairReentrantWriter
 )
 
 class StandardLockWrapper:
@@ -112,7 +112,7 @@ def main():
         StandardLockWrapper, StandardRLockWrapper,
         RWLockWrite, RWLockWriteReentrantWriter,
         RWLockRead, RWLockReadReentrantWriter,
-        RWLockFIFO, RWLockFIFOReentrantWriter
+        RWLockFair, RWLockFairReentrantWriter
     ]
     
     engine = ExactBenchmarker(locks_to_test)
@@ -126,7 +126,7 @@ def main():
     # 1. READ HEAVY: Readers should execute in parallel. RWLocks should DESTROY baselines.
     engine.run_workload("Read-Heavy (Cache Hit Sim)", scenario, num_readers=100, num_writers=2, iterations=10)
 
-    # 2. BALANCED: Mixed workload. RWLockFIFO should show its stability.
+    # 2. BALANCED: Mixed workload. RWLockFair should show its stability.
     engine.run_workload("Balanced (Standard Web Traffic)", scenario, num_readers=50, num_writers=50, iterations=10)
 
     # 3. WRITE HEAVY: Sequential by nature. C-Baseline will win. Your locks will take a penalty.

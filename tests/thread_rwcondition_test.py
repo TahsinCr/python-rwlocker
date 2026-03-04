@@ -6,17 +6,17 @@ from typing import Type
 from rwlocker.thread_rwlock import (
     RWLockWrite, RWLockWriteReentrantWriter,
     RWLockRead, RWLockReadReentrantWriter,
-    RWLockFIFO, RWLockFIFOReentrantWriter,
-    RWLockBase, RWCondition
+    RWLockFair, RWLockFairReentrantWriter,
+    RWLockBase, RWCondition, Condition
 )
 
-class BaseRWConditionTests:
+class BaseConditionTests:
     lock_class: Type[RWLockBase] = None
 
     def setUp(self):
         if self.lock_class:
             self.lock = self.lock_class()
-            self.condition = RWCondition(self.lock)
+            self.condition = Condition(self.lock)
 
     def test_initial_state(self):
         self.assertFalse(self.condition.read.locked())
@@ -141,6 +141,13 @@ class BaseRWConditionTests:
             self.assertFalse(result, "wait_for() should return the predicate's truth value (False).")
             self.assertGreaterEqual(elapsed, 0.1, "wait_for should block until timeout expires.")
 
+
+class RWConditionTests(BaseConditionTests):
+    def setUp(self):
+        if self.lock_class:
+            self.lock = self.lock_class()
+            self.condition = RWCondition(self.lock)
+
     def test_downgrade_condition_release_safety(self):
         """
         Verify that if the underlying Write proxy is downgraded, the Condition 
@@ -157,24 +164,27 @@ class BaseRWConditionTests:
         self.assertFalse(self.condition.write.locked())
 
 
-class TestRWConditionWithWriteLock(BaseRWConditionTests, unittest.TestCase):
+
+class TestRWConditionWithWriteLock(RWConditionTests, unittest.TestCase):
     lock_class = RWLockWrite
 
-class TestRWConditionWithWriteReentrantLock(BaseRWConditionTests, unittest.TestCase):
+class TestRWConditionWithWriteReentrantLock(RWConditionTests, unittest.TestCase):
     lock_class = RWLockWriteReentrantWriter
 
-class TestRWConditionWithReadLock(BaseRWConditionTests, unittest.TestCase):
+class TestRWConditionWithReadLock(RWConditionTests, unittest.TestCase):
     lock_class = RWLockRead
 
-class TestRWConditionWithReadReentrantLock(BaseRWConditionTests, unittest.TestCase):
+class TestRWConditionWithReadReentrantLock(RWConditionTests, unittest.TestCase):
     lock_class = RWLockReadReentrantWriter
 
-class TestRWConditionWithFIFOLock(BaseRWConditionTests, unittest.TestCase):
-    lock_class = RWLockFIFO
+class TestRWConditionWithFairLock(RWConditionTests, unittest.TestCase):
+    lock_class = RWLockFair
 
-class TestRWConditionWithFIFOReentrantLock(BaseRWConditionTests, unittest.TestCase):
-    lock_class = RWLockFIFOReentrantWriter
+class TestRWConditionWithFairReentrantLock(RWConditionTests, unittest.TestCase):
+    lock_class = RWLockFairReentrantWriter
 
+class TestCondition(BaseConditionTests, unittest.TestCase):
+    lock_class = threading.Lock
 
 if __name__ == '__main__':
     unittest.main()

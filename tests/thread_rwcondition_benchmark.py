@@ -4,7 +4,7 @@ import gc
 from typing import Type, List
 
 from rwlocker.thread_rwlock import (
-    RWLockWrite, RWLockRead, RWLockFIFO,
+    RWLockWrite, RWLockRead, RWLockFair,
     RWCondition
 )
 
@@ -36,13 +36,13 @@ class RWConditionReadWrapper:
     @classmethod
     def get_name(cls): return "RWCondition (Read-Pref)"
 
-class RWConditionFIFOWrapper:
+class RWConditionFairWrapper:
     def __init__(self):
-        self._cond = RWCondition(RWLockFIFO())
+        self._cond = RWCondition(RWLockFair())
         self.read = self._cond.read
         self.write = self._cond.write
     @classmethod
-    def get_name(cls): return "RWCondition (FIFO)"
+    def get_name(cls): return "RWCondition (Fair)"
 
 
 class ReaderWriterConditionScenario:
@@ -145,7 +145,7 @@ def main():
         StandardConditionWrapper,
         RWConditionWriteWrapper, 
         RWConditionReadWrapper, 
-        RWConditionFIFOWrapper
+        RWConditionFairWrapper
     ]
     
     engine = ConditionBenchmarker(conditions_to_test)

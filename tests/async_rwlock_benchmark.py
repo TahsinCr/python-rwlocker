@@ -7,7 +7,7 @@ from rwlocker.async_rwlock import (
     AsyncRWLockBase, 
     AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
     AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
-    AsyncRWLockFIFO, AsyncRWLockFIFOReentrantWriter
+    AsyncRWLockFair, AsyncRWLockFairReentrantWriter
 )
 
 class AsyncStandardLockWrapper:
@@ -105,7 +105,7 @@ async def main():
         AsyncStandardLockWrapper,
         AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
         AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
-        AsyncRWLockFIFO, AsyncRWLockFIFOReentrantWriter
+        AsyncRWLockFair, AsyncRWLockFairReentrantWriter
     ]
     
     engine = AsyncExactBenchmarker(locks_to_test)
@@ -119,7 +119,7 @@ async def main():
     # 1. READ HEAVY: Readers should execute in parallel. RWLocks should DESTROY baselines.
     await engine.run_workload("Read-Heavy (Cache Hit Sim)", scenario, num_readers=100, num_writers=2, iterations=10)
 
-    # 2. BALANCED: Mixed workload. RWLockFIFO should show its stability.
+    # 2. BALANCED: Mixed workload. RWLockFair should show its stability.
     await engine.run_workload("Balanced (Standard Web Traffic)", scenario, num_readers=50, num_writers=50, iterations=10)
 
     # 3. WRITE HEAVY: Sequential by nature. Baseline will win. Your locks will take a penalty.

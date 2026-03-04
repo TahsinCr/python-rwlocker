@@ -1,13 +1,13 @@
 import asyncio
 from typing import Dict
-from rwlocker.async_rwlock import AsyncRWLockFIFO
+from rwlocker.async_rwlock import AsyncRWLockFair
 
 class TelemetryDispatcher:
     """A highly concurrent state manager for robotics and real-time dashboards."""
     
     def __init__(self):
-        # FIFO guarantees perfect interleaving between heavy reads and heavy writes.
-        self._lock = AsyncRWLockFIFO()
+        # Fair guarantees perfect interleaving between heavy reads and heavy writes.
+        self._lock = AsyncRWLockFair()
         self._state: Dict[str, float] = {"alt": 0.0, "lat": 0.0, "lon": 0.0}
 
     async def ingest_sensor_data(self, new_data: Dict[str, float]) -> None:

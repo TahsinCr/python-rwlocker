@@ -1,28 +1,36 @@
 """
-Advanced Read-Write Lock (RWLock) Concurrency Primitives.
+Advanced Read-Write Lock (RWLock) and Condition Concurrency Primitives.
 
 This package provides a comprehensive, highly optimized, state-machine-based 
-suite of Read-Write locks for both Synchronous (`threading`) and Asynchronous 
-(`asyncio`) Python applications. 
+suite of Read-Write locks and Condition variables for both Synchronous 
+(`threading`) and Asynchronous (`asyncio`) Python applications. 
 
 Designed for high-performance systems (e.g., telemetry processing, data streams), 
-it guarantees strict data safety while maximizing read concurrency.
+it guarantees strict data safety while maximizing read concurrency and 
+preventing CPU/Event-Loop bottlenecks.
 
 Key Architectural Features:
     - **Multiple Scheduling Strategies**: Choose between Write-preferring, 
       Read-preferring, and Fair (FIFO) algorithms to prevent starvation based 
       on your specific workload.
-    - **Smart Proxies**: Locks are interacted with via `.read` and `.write` attributes. 
-      These proxies intelligently route `release()` operations, even after complex 
-      state transitions, preventing deadlocks natively.
+    - **O(1) Condition Queuing (Stampede Protection)**: Condition variables 
+      (`RWCondition`, `AsyncRWCondition`) utilize pure O(1) waiter queues 
+      to completely eliminate O(N) cache stampedes and event-loop blocking 
+      during massive `notify_all()` calls.
+    - **Smart Proxies**: Locks and conditions are interacted with via `.read` 
+      and `.write` attributes. These proxies intelligently route `release()` 
+      operations, even after complex state transitions, preventing deadlocks.
     - **Atomic Downgrading**: Transition from a Write lock to a Read lock seamlessly. 
       The `.downgrade()` operation ensures no other writer can hijack the lock 
       during the transition.
-    - **Zero-Allocation Fast-Paths**: Standard lock acquisition and release are 
-      optimized to avoid runtime object creation, minimizing CPU cycles and 
-      Garbage Collection (GC) pressure.
-    - **Cancellation Safety (Async)**: Asynchronous locks are fully resilient to 
-      `asyncio.CancelledError`, ensuring event loop integrity during task aborts.
+    - **Adapter Pattern & Solid Base**: Standard locks and conditions are 
+      encapsulated via `Lock`, `Condition`, `AsyncLock`, and `AsyncCondition` 
+      adapters, sharing the exact same API signatures for seamless dependency injection.
+    - **Zero-Allocation Fast-Paths**: Standard synchronous lock acquisition 
+      and release are optimized to avoid runtime object creation.
+    - **Flawless Cancellation Shielding (Async)**: Asynchronous locks and 
+      condition `wait()` operations are strictly resilient to `asyncio.CancelledError`, 
+      ensuring safe state recovery during task aborts.
 
 Important Usage Notes & Gotchas:
     - **Reentrancy (`ReentrantWriter` variants)**: Reentrancy is STRICTLY supported for 
@@ -40,15 +48,20 @@ Basic Example:
     >>> with lock.write:
     ...     # Exclusive write access
     ...     lock.write.downgrade()
-    ...     # Atomically downgraded to read access
+    ...     # Atomically downgraded to shared read access
+    
+    >>> cond = RWCondition(RWLockWrite())
+    >>> with cond.read:
+    ...     # Sleep at O(1) cost without blocking other readers
+    ...     cond.read.wait_for(lambda: True)
 
-    >>> async_lock = AsyncRWLockWrite()
-    >>> async with async_lock.read:
-    ...     # Shared read access
-    ...     pass
+    >>> async_cond = AsyncRWCondition(AsyncRWLockRead())
+    >>> async with async_cond.write:
+    ...     # Wake up thousands of tasks instantly without event-loop lag
+    ...     async_cond.write.notify_all()
 """
 
 from .thread_rwlock import *
 from .async_rwlock import *
 
-__version__ = '2.0'
+__version__ = '3.0'

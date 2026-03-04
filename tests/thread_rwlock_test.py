@@ -6,31 +6,21 @@ from typing import Type
 from rwlocker.thread_rwlock import (
     RWLockWrite, RWLockWriteReentrantWriter,
     RWLockRead, RWLockReadReentrantWriter,
-    RWLockFIFO, RWLockFIFOReentrantWriter,
-    RWLockBase
+    RWLockFair, RWLockFairReentrantWriter,
+    RWLockBase, Lock
 )
 
-class BaseRWLockTests:
+class BaseLockTests:
     lock_class: Type[RWLockBase] = None
+    lock_inner: Type[threading.Lock] = None
 
     def setUp(self):
         if self.lock_class:
-            self.lock = self.lock_class()
+            self.lock = self.lock_class(self.lock_inner() if self.lock_inner else None)
 
     def test_initial_state(self):
         self.assertFalse(self.lock.read.locked())
         self.assertFalse(self.lock.write.locked())
-
-    def test_lock_status_reflection(self):
-        self.lock.read.acquire()
-        self.assertTrue(self.lock.read.locked())
-        self.assertFalse(self.lock.write.locked())
-        self.lock.read.release()
-        
-        self.lock.write.acquire()
-        self.assertFalse(self.lock.read.locked())
-        self.assertTrue(self.lock.write.locked())
-        self.lock.write.release()
 
     def test_multiple_readers_concurrently(self):
         acquired_flags = []
@@ -47,6 +37,45 @@ class BaseRWLockTests:
             t.join()
 
         self.assertEqual(len(acquired_flags), 3, "All readers should have acquired the lock concurrently.")
+
+    def test_context_managers(self):
+        with self.lock.write:
+            self.assertTrue(self.lock.write.locked())
+        self.assertFalse(self.lock.write.locked())
+
+        with self.lock.read:
+            self.assertTrue(self.lock.read.locked())
+        self.assertFalse(self.lock.read.locked())
+
+    def test_unacquired_release_raises(self):
+        with self.assertRaises(RuntimeError, msg="Releasing an unacquired write lock should raise RuntimeError."):
+            self.lock.write.release()
+        
+        with self.assertRaises(RuntimeError, msg="Releasing an unacquired read lock should raise RuntimeError."):
+            self.lock.read.release()
+
+class RWLockTests(BaseLockTests):
+    def test_lock_status_reflection(self):
+        self.lock.read.acquire()
+        self.assertTrue(self.lock.read.locked())
+        self.assertFalse(self.lock.write.locked())
+        self.lock.read.release()
+        
+        self.lock.write.acquire()
+        self.assertFalse(self.lock.read.locked())
+        self.assertTrue(self.lock.write.locked())
+        self.lock.write.release()
+
+    def test_timeout_functionality(self):
+        self.lock.write.acquire()
+        
+        start_time = time.monotonic()
+        success = self.lock.read.acquire(timeout=0.1)
+        elapsed = time.monotonic() - start_time
+        
+        self.assertFalse(success, "Acquire should fail when timeout is reached.")
+        self.assertGreaterEqual(elapsed, 0.1, "Elapsed time should be greater than or equal to the specified timeout.")
+        self.lock.write.release()
 
     def test_writer_exclusivity(self):
         self.assertTrue(self.lock.write.acquire())
@@ -67,15 +96,6 @@ class BaseRWLockTests:
         
         self.lock.read.release()
 
-    def test_context_managers(self):
-        with self.lock.write:
-            self.assertTrue(self.lock.write.locked())
-        self.assertFalse(self.lock.write.locked())
-
-        with self.lock.read:
-            self.assertTrue(self.lock.read.locked())
-        self.assertFalse(self.lock.read.locked())
-
     def test_downgrade_functionality(self):
         self.lock.write.acquire()
         self.lock.write.downgrade()
@@ -87,25 +107,6 @@ class BaseRWLockTests:
 
         self.lock.read.release()
         self.assertFalse(self.lock.read.locked())
-
-    def test_timeout_functionality(self):
-        self.lock.write.acquire()
-        
-        start_time = time.monotonic()
-        success = self.lock.read.acquire(timeout=0.1)
-        elapsed = time.monotonic() - start_time
-        
-        self.assertFalse(success, "Acquire should fail when timeout is reached.")
-        self.assertGreaterEqual(elapsed, 0.1, "Elapsed time should be greater than or equal to the specified timeout.")
-        self.lock.write.release()
-
-    def test_unacquired_release_raises(self):
-        with self.assertRaises(RuntimeError, msg="Releasing an unacquired write lock should raise RuntimeError."):
-            self.lock.write.release()
-        
-        with self.assertRaises(RuntimeError, msg="Releasing an unacquired read lock should raise RuntimeError."):
-            self.lock.read.release()
-
 
 class ReentrantWriterTestsMixin:
     def test_reentrant_write(self):
@@ -188,23 +189,30 @@ class ReentrantWriterTestsMixin:
         self.lock.write.release()
 
 
-class TestRWLockWrite(BaseRWLockTests, unittest.TestCase):
+class TestRWLockWrite(RWLockTests, unittest.TestCase):
     lock_class = RWLockWrite
 
-class TestRWLockWriteReentrantWriter(ReentrantWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
+class TestRWLockWriteReentrantWriter(ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
     lock_class = RWLockWriteReentrantWriter
 
-class TestRWLockRead(BaseRWLockTests, unittest.TestCase):
+class TestRWLockRead(RWLockTests, unittest.TestCase):
     lock_class = RWLockRead
 
-class TestRWLockReadReentrantWriter(ReentrantWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
+class TestRWLockReadReentrantWriter(ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
     lock_class = RWLockReadReentrantWriter
 
-class TestRWLockFIFO(BaseRWLockTests, unittest.TestCase):
-    lock_class = RWLockFIFO
+class TestRWLockFair(RWLockTests, unittest.TestCase):
+    lock_class = RWLockFair
 
-class TestRWLockFIFOReentrantWriter(ReentrantWriterTestsMixin, BaseRWLockTests, unittest.TestCase):
-    lock_class = RWLockFIFOReentrantWriter
+class TestRWLockFairReentrantWriter(ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
+    lock_class = RWLockFairReentrantWriter
+
+class TestLock(BaseLockTests, unittest.TestCase):
+    lock_class = Lock
+
+class TestRLock(BaseLockTests, unittest.TestCase):
+    lock_class = Lock
+    lock_inner = threading.RLock
 
 if __name__ == '__main__':
     unittest.main()

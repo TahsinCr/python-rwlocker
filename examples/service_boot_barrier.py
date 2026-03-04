@@ -1,6 +1,6 @@
 import threading
 import time
-from rwlocker.thread_rwlock import RWLockWrite, RWCondition
+from rwlocker.thread_rwlock import RWCondition
 
 class ServiceBootBarrier:
     """
@@ -8,7 +8,7 @@ class ServiceBootBarrier:
     Demonstrates how to safely use timeouts with Condition.wait()
     """
     def __init__(self):
-        self._cond = RWCondition(RWLockWrite())
+        self._cond = RWCondition() # default RWLockWrite
         self._is_database_ready = False
 
     def mark_database_ready(self) -> None:

@@ -4,7 +4,7 @@ import gc
 from typing import Type, List
 
 from rwlocker.async_rwlock import (
-    AsyncRWLockWrite, AsyncRWLockRead, AsyncRWLockFIFO,
+    AsyncRWLockWrite, AsyncRWLockRead, AsyncRWLockFair,
     AsyncRWCondition
 )
 
@@ -36,13 +36,13 @@ class AsyncRWConditionReadWrapper:
     @classmethod
     def get_name(cls): return "AsyncRWCondition (Read-Pref)"
 
-class AsyncRWConditionFIFOWrapper:
+class AsyncRWConditionFairWrapper:
     def __init__(self):
-        self._cond = AsyncRWCondition(AsyncRWLockFIFO())
+        self._cond = AsyncRWCondition(AsyncRWLockFair())
         self.read = self._cond.read
         self.write = self._cond.write
     @classmethod
-    def get_name(cls): return "AsyncRWCondition (FIFO)"
+    def get_name(cls): return "AsyncRWCondition (Fair)"
 
 
 class AsyncReaderWriterConditionScenario:
@@ -147,7 +147,7 @@ async def main():
         AsyncStandardConditionWrapper,
         AsyncRWConditionWriteWrapper, 
         AsyncRWConditionReadWrapper, 
-        AsyncRWConditionFIFOWrapper
+        AsyncRWConditionFairWrapper
     ]
     
     engine = AsyncConditionBenchmarker(conditions_to_test)

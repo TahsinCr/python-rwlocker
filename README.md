@@ -48,6 +48,9 @@ Standard `Condition` structures in the library wake up all waiting threads/tasks
 * **O(1) Condition Queuing (Stampede Protection):** Unlike standard libraries, it does not perform O(N) scanning on `notify_all()` calls. It wakes up hundreds of tasks instantly without choking the CPU.
 * **Smart Signaling:** The ability to accurately wake up only the exact number of tasks you need, such as `notify(n=5)`, without creating a "Thundering Herd" in the system.
 * **Flawless Cancellation Shielding:** If a task is cancelled from the outside (`CancelledError`) while waiting in an asynchronous `Condition.wait()`, the lock state is never corrupted. The lock is safely re-acquired and passed on to other waiters.
+* **100% Drop-in Replacement:** You can inject your advanced locks (`RWLockFair`, etc.) directly into third-party libraries (SQLAlchemy, requests, FastAPI, etc.) expecting standard `threading.Lock` or `asyncio.Lock` instances without making any code changes. Standard API calls (e.g., `lock.acquire()`) are automatically and safely routed to the `.write` (exclusive) proxy.
+* **"Happy Path" Performance Isolation:** A next-generation, OS-Interrupt-resilient micro-queue architecture that completely bypasses O(N) cost cleanup operations upon successful lock wake-ups, completing the process with zero CPU overhead.
+* **Standard Adapters:** `Lock`, `Condition`, `AsyncLock`, and `AsyncCondition` standard wrapper classes for dependency injections where advanced RWLock features are not required but the same architectural signature (`.read`, `.write`) is desired.
 
 ### 🛡️ Lock Strategies
 
@@ -57,7 +60,7 @@ You can select the right lock strategy based on your system's bottleneck profile
 | --- | --- | --- | --- |
 | **Writer-Preferring** | `RWLockWrite` / `AsyncRWLockWrite` | Forbids new readers from entering if there is a waiting writer. Prevents writer starvation. | To prevent writers from being overwhelmed in read-heavy systems. |
 | **Reader-Preferring** | `RWLockRead` / `AsyncRWLockRead` | Continuously allows new readers in, even if writers are waiting. Provides maximum parallelism. | In cache structures where write operations are very rare or non-critical. |
-| **Fair (FIFO)** | `RWLockFIFO` / `AsyncRWLockFIFO` | Grants access alternately between readers and writers (interleaving). Prevents starvation for both sides. | In high-frequency, bidirectional traffic (MAVLink, WebSockets, etc.). |
+| **Fair** | `RWLockFair` / `AsyncRWLockFair` | Grants access alternately between readers and writers (interleaving). Prevents starvation for both sides. | In high-frequency, bidirectional traffic (MAVLink, WebSockets, etc.). |
 > 💡 **Condition Compatibility:** The `RWCondition` and `AsyncRWCondition` classes in the library are designed to encapsulate all the lock strategies mentioned above (Dependency Injection). You can choose the lock that best fits your system and transform it into a state machine running at pure O(1) speed.
 <br/>
 
@@ -72,9 +75,11 @@ Lock classes establish a circular reference graph (Lock -> Proxy -> Lock) when c
 3. **Strict Nested Write Locks:**
 In `ReentrantWriter` variants, only "Write" locks can be nested. If a writer wants to acquire a reader lock, it cannot do so implicitly; it must explicitly call the `.downgrade()` method. This is a strict architectural decision made to prevent deadlocks at the structural level.
 4. **The Cost of Fairness:**
-If you use the `FIFO` (Fair) strategy, the system forces a strict order-based context switch between readers and writers to guarantee that no one starves (No Starvation). Especially in **`RWCondition`** uses and write-heavy scenarios, this effort to maintain fair order causes a certain slowdown compared to the standard, rule-less C-based `Condition` object (this is why FIFO scores 0.50x in benchmarks). This is not a bug or a lack of optimization; it is the engineering price paid to ensure "fairness".
+If you use the `Fair` strategy, the system forces a strict order-based context switch between readers and writers to guarantee that no one starves (No Starvation). Especially in **`RWCondition`** uses and write-heavy scenarios, this effort to maintain fair order causes a certain slowdown compared to the standard, rule-less C-based `Condition` object (this is why Fair scores 0.50x in benchmarks). This is not a bug or a lack of optimization; it is the engineering price paid to ensure "fairness".
 5. **Condition Memory vs CPU Trade-off:**
 While a standard `threading.Condition` keeps a simple C-level counter in the background, `rwlocker` stores a tiny `Lock` or `asyncio.Future` object in memory for each waiting task/thread to guarantee O(1) wake-up speed. This completely resolves CPU bottlenecks (Cache Stampede), but in extreme cases where tens of thousands of tasks are waiting, it creates a small memory footprint in RAM.
+6. **Drop-in Security Assumption:**
+If you use the lock objects directly like a standard lock without specifying the `.read` or `.write` proxies (e.g., `with lock:` or `await cond.wait()`), the system automatically acquires the **Write (Exclusive)** lock to ensure backward compatibility and absolute data security. This is a "Secure by Default" approach established to prevent external libraries from corrupting data.
 
 <br/>
 
@@ -87,7 +92,7 @@ While a standard `threading.Condition` keeps a simple C-level counter in the bac
 * **🚀 Read-Heavy Scenario (100 Readers, 2 Writers):**
 While standard locks queue readers single-file and choke the system, `rwlocker` allows readers to access the data simultaneously. This achieves **~37x FASTER** speed and throughput in **Threading** and **~30x FASTER** in **Asyncio**.
 * **⚖️ Balanced Scenario (50 Readers, 50 Writers):**
-Thanks to the Fair (FIFO) state machine, read operations are squeezed in parallel between write queues. It increases performance by **2x** compared to standard locks without creating a system bottleneck.
+Thanks to the Fair state machine, read operations are squeezed in parallel between write queues. It increases performance by **2x** compared to standard locks without creating a system bottleneck.
 * **🛡️ Write-Heavy Scenario (2 Readers, 100 Writers):**
 Even though write operations inherently cannot be executed concurrently (in parallel), thanks to `rwlocker`'s zero-allocation smart proxy architecture, it runs **7-8% faster** than standard `C`-based locks. Even the O(1) cost "ReentrantWriter" (reentrancy) feature adds almost no overhead to performance.
 
@@ -100,9 +105,9 @@ When a single writer updates the database and wakes up hundreds of waiting reade
 * **🔀 Balanced Pub/Sub (50 Writers, 50 Readers):**
 In mixed waiting and waking scenarios, our Condition locks with the `Write-Pref` strategy ran **~2x FASTER** than the standard library.
 * **📉 Write-Heavy Limit (Stress Test - 100 Writers, 2 Readers):**
-In this brutal scenario where writers constantly block each other and call `notify()`, C-based standard locks utilize their raw speed advantage. `rwlocker`'s Write-Pref model holds its ground neck-and-neck (1.0x) with the standard lock, while the FIFO and Read-Pref models intentionally slow down (0.5x - 0.7x) for the sake of maintaining fairness.
+In this brutal scenario where writers constantly block each other and call `notify()`, C-based standard locks utilize their raw speed advantage. `rwlocker`'s Write-Pref model holds its ground neck-and-neck (1.0x) with the standard lock, while the Fair and Read-Pref models intentionally slow down (0.5x - 0.7x) for the sake of maintaining fairness.
 
-*(Note: All lock and condition classes have passed **252 different unit tests** covering reentrancy, deadlock, timeout, O(N) leaks, and cancellation safety scenarios with 0 errors, completing in mere milliseconds.)*
+*(Note: All lock, adapter, and condition classes have passed a massive suite of **266 different unit tests** covering reentrancy, deadlock, timeout, OS interrupts, O(N) leaks, and cancellation safety scenarios with 0 errors, and this entire test suite was completed in just **8.5 seconds**.)*
 
 <br/>
 
@@ -240,19 +245,19 @@ class AuthTokenManager:
 
 ```
 
-#### 4. High-Frequency Telemetry (Fair FIFO Distribution)
+#### 4. High-Frequency Telemetry (Fair Distribution)
 
-Data arrives from a sensor 100 times per second (Write), and 200 WebSockets read this data (Read). The FIFO architecture prevents both sides from starving.
+Data arrives from a sensor 100 times per second (Write), and 200 WebSockets read this data (Read). The Fair architecture prevents both sides from starving.
 
 ```python
 import asyncio
 from typing import Dict
-from rwlocker.async_rwlock import AsyncRWLockFIFO
+from rwlocker.async_rwlock import AsyncRWLockFair
 
 class TelemetryDispatcher:
     def __init__(self):
-        # FIFO (Fair Lock) prevents read and write intensities from choking each other.
-        self._lock = AsyncRWLockFIFO()
+        # Fair prevents read and write intensities from choking each other.
+        self._lock = AsyncRWLockFair()
         self._state = {"alt": 0.0, "lat": 0.0, "lon": 0.0}
 
     async def ingest_sensor_data(self, new_data: Dict[str, float]):
@@ -276,7 +281,7 @@ class TelemetryDispatcher:
 
 ```
 
-#### 5. Event-Driven Cache Refresh (Async Condition & Stampede Protection)
+#### 5. Event-Driven Cache Refresh (Thundering Herd Protection)
 
 If thousands of tasks try to fetch an expired token from the database simultaneously, the DB crashes. With `AsyncRWCondition`, while 1 task updates the data, the other 999 tasks safely sleep without choking the CPU (at O(1) speed) and are awakened all at once afterward.
 
@@ -320,12 +325,12 @@ When 3 new jobs arrive in the system, instead of waking up all 50 idle worker th
 ```python
 from collections import deque
 import threading
-from rwlocker.thread_rwlock import RWLockFIFO, RWCondition
+from rwlocker.thread_rwlock import RWLockFair, RWCondition
 
 class ImageProcessingQueue:
     def __init__(self):
-        # Fair FIFO strategy to prevent Producers and Consumers from crushing each other
-        self._cond = RWCondition(RWLockFIFO())
+        # Fair strategy to prevent Producers and Consumers from crushing each other
+        self._cond = RWCondition(RWLockFair())
         self._queue = deque()
 
     def add_jobs(self, jobs: list[str]):
@@ -347,6 +352,34 @@ class ImageProcessingQueue:
         # Perform the heavy processing AFTER releasing the lock.
         print(f"Processing: {job}")
 
+```
+
+#### 7. 100% Drop-in Replacement Compatibility
+
+Inject the power of `rwlocker` into your system without changing your legacy code or third-party libraries that expect a standard `threading.Lock` or `asyncio.Lock`.
+
+```python
+import threading
+from rwlocker.thread_rwlock import RWLockFair, Lock
+
+# Scenario: A third-party function expects a standard threading.Lock
+def third_party_worker(standard_lock: threading.Lock, data: list):
+    # The external library doesn't know about ".write" or ".read" proxies.
+    # It directly uses "with lock:".
+    with standard_lock:
+        data.append("Processed")
+        print("Lock acquired via standard API!")
+
+# METHOD 1: You can pass an advanced RWLock object directly!
+# RWLockFair detects these calls and automatically switches to the 
+# .write (exclusive) mode because it is the safest assumption.
+advanced_lock = RWLockFair()
+third_party_worker(advanced_lock, [])
+
+# METHOD 2: If you only need standard lock behavior, 
+# you can use standard adapters that share the same signature.
+simple_adapter_lock = Lock()
+third_party_worker(simple_adapter_lock, [])
 ```
 
 *For more examples, please check the [examples][examples-url] directory.*
@@ -395,7 +428,7 @@ git push origin feature/AmazingFeature
 
 5. Open a **Pull Request** on this repository.
 
-> ⚠️ **Important Developer Note:** The `rwlocker` architecture is highly sensitive to *deadlock* and *reentrancy* scenarios. Before opening a PR, please ensure that all **252+ unit tests** in the project pass flawlessly and that your code complies with **Python 3.9+** standards.
+> ⚠️ **Important Developer Note:** The `rwlocker` architecture is highly sensitive to *deadlock*, *OS-Interrupts*, and *reentrancy* scenarios. Before opening a PR, please ensure that all **266+ unit tests** in the project pass flawlessly and that your code complies with **Python 3.9+** standards.
 
 <br/>
 
