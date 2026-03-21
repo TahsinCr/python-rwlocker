@@ -54,6 +54,23 @@ class BaseLockTests:
         with self.assertRaises(RuntimeError, msg="Releasing an unacquired read lock should raise RuntimeError."):
             self.lock.read.release()
 
+    def test_exception_handling_in_context_manager(self):
+        class CustomException(Exception): pass
+        
+        try:
+            with self.lock.write:
+                raise CustomException()
+        except CustomException:
+            pass
+        self.assertFalse(self.lock.write.locked(), "Write lock must be released if an exception occurs inside the context.")
+
+        try:
+            with self.lock.read:
+                raise CustomException()
+        except CustomException:
+            pass
+        self.assertFalse(self.lock.read.locked(), "Read lock must be released if an exception occurs inside the context.")
+
 class RWLockTests(BaseLockTests):
     def test_lock_status_reflection(self):
         self.lock.read.acquire()
@@ -107,6 +124,38 @@ class RWLockTests(BaseLockTests):
 
         self.lock.read.release()
         self.assertFalse(self.lock.read.locked())
+
+    def test_writer_downgrade_wakes_readers(self):
+        self.lock.write.acquire()
+        
+        reader_acquired = threading.Event()
+        def reader_func():
+            with self.lock.read:
+                reader_acquired.set()
+
+        t = threading.Thread(target=reader_func)
+        t.start()
+        
+        time.sleep(0.05)
+        self.assertFalse(reader_acquired.is_set(), "Reader should block while write lock is held.")
+        
+        self.lock.write.downgrade()
+        reader_acquired.wait(timeout=1.0)
+        self.assertTrue(reader_acquired.is_set(), "Reader should wake up when writer downgrades.")
+        
+        self.lock.read.release()
+        t.join()
+
+    def test_timeout_removes_waiter_from_queue(self):
+        self.lock.write.acquire()
+        t = threading.Thread(target=lambda: self.lock.read.acquire(timeout=0.05))
+        t.start()
+        t.join()
+        
+        try:
+            self.lock.write.release()
+        except Exception as e:
+            self.fail(f"Releasing write lock after a timed-out read attempt raised an exception: {e}")
 
 class ReentrantWriterTestsMixin:
     def test_reentrant_write(self):

@@ -49,6 +49,23 @@ class BaseAsyncLockTests:
         with self.assertRaises(RuntimeError, msg="Releasing an unacquired read lock should raise RuntimeError."):
             self.lock.read.release()
 
+    async def test_exception_handling_in_context_manager(self):
+        class CustomException(Exception): pass
+        
+        try:
+            async with self.lock.write:
+                raise CustomException()
+        except CustomException:
+            pass
+        self.assertFalse(self.lock.write.locked(), "Write lock must be released if an exception occurs inside the context.")
+
+        try:
+            async with self.lock.read:
+                raise CustomException()
+        except CustomException:
+            pass
+        self.assertFalse(self.lock.read.locked(), "Read lock must be released if an exception occurs inside the context.")
+
 class AsyncRWLockTests(BaseAsyncLockTests):
     async def test_lock_status_reflection(self):
         await self.lock.read.acquire()
@@ -108,6 +125,52 @@ class AsyncRWLockTests(BaseAsyncLockTests):
 
         self.lock.read.release()
         self.assertFalse(self.lock.read.locked())
+
+    async def test_writer_downgrade_wakes_readers(self):
+        await self.lock.write.acquire()
+        
+        reader_acquired = asyncio.Event()
+        async def reader_task():
+            async with self.lock.read:
+                reader_acquired.set()
+
+        t = asyncio.create_task(reader_task())
+        await asyncio.sleep(0.05)
+        self.assertFalse(reader_acquired.is_set(), "Reader should block while write lock is held.")
+        
+        self.lock.write.downgrade()
+        await asyncio.wait_for(reader_acquired.wait(), timeout=1.0)
+        self.assertTrue(reader_acquired.is_set(), "Reader should wake up when writer downgrades.")
+        
+        self.lock.read.release()
+        await t
+
+    async def test_task_cancellation_during_wait(self):
+        await self.lock.write.acquire()
+        
+        wait_started = asyncio.Event()
+        async def reader_task():
+            wait_started.set()
+            await self.lock.read.acquire()
+
+        t = asyncio.create_task(reader_task())
+        await wait_started.wait()
+        await asyncio.sleep(0.05) 
+        
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+            
+        self.assertTrue(self.lock.write.locked(), "Lock must remain acquired safely.")
+        self.lock.write.release()
+        
+        try:
+            await asyncio.wait_for(self.lock.read.acquire(), timeout=0.5)
+            self.lock.read.release()
+        except asyncio.TimeoutError:
+            self.fail("Could not acquire lock after a waiting task was cancelled. Wait queue might be corrupted.")
 
 class ReentrantWriterAsyncTestsMixin:
     async def test_reentrant_write(self):

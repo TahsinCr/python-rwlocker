@@ -1,6 +1,50 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
+## **[3.1] - 20.03.2026**
+The **"Micro-Optimizations & Memory Safety"** update. This version introduces targeted performance improvements to internal state checks, cleans up the codebase by removing duplicates, and resolves a critical memory leak in asynchronous broadcast queues.
+
+### Added
+* **Advanced Test Scenarios**:
+    * Introduced `test_exception_handling_in_context_manager` to guarantee `with`/`async with` blocks strictly release locks upon raised exceptions.
+    * Added `test_writer_downgrade_wakes_readers` to validate atomic downgrades automatically signaling sleeping readers.
+    * Embedded `test_task_cancellation_during_wait` in `AsyncRWLock` to ensure task cancellations (`CancelledError`) cleanly pop from queues without leaving zombie waiters.
+    * Appended `test_massive_notify_all_cache_stampede_resilience` for Conditions to stress-test 100+ concurrent wake-ups with zero drop rates.
+* **Automated Benchmark Orchestration & Visualization**:
+    * Introduced `collect_benchmark_data_script.py` to silently execute benchmarks and export pure data as structured JSON files.
+    * Created `benchmark_figure_script.py` with a `BenchmarkOrchestrator` to automatically trigger data collection across multiple Python interpreters (Standard, Free-Threading GIL On, Free-Threading GIL Off) via `subprocess`.
+    * Implemented an advanced `BenchmarkPlotter` using `pandas` and `seaborn` that dynamically ingests JSON results and renders highly detailed, adaptive, and transparent SVG charts optimized for GitHub themes.
+* **Documentation & Internationalization**:
+    * Embedded the newly generated, highly detailed SVG benchmark graphics directly into the README files to visually demonstrate the massive performance leaps.
+    * Introduced full Russian language support (`README_ru.md`), providing a meticulous and technically accurate translation of the entire documentation.
+    * Expanded the "Performance and Benchmark Results" sections to include comprehensive testing methodology and hardware environment details for absolute transparency.
+
+### Updated
+* **Reentrant Lock Fast-Paths (Thread & Async)**:
+    * Optimized the core `_can_read` and `_can_write` checks for all Reentrant lock variations.
+    * Previously, these locks constantly called expensive system-level functions (`threading.get_ident()` or `asyncio.current_task()`) even when no writer was active. We now bypass these calls entirely when the lock is free.
+    * This results in a significant speed boost for Reentrant locks during heavy read workloads.
+* **O(1) Efficiency for Downgraded Locks**:
+    * Improved the cleanup process inside the `.write.release()` method for locks that have been downgraded.
+    * Replaced a double condition check (`if item in set: set.remove(item)`) with a more efficient, single-step `try/except` block. This reduces the computational overhead of hash lookups.
+* **Unified Core Logic with State-Machine Mixins**:
+    * Extracted the core scheduling algorithms (like `_can_read` and `_can_write`) that were identical across Thread and Async lock variations.
+    * Created a new `mixins.py` module to house these shared behaviors.
+    * This change removes hundreds of lines of duplicated code, making the library much easier to maintain without mixing OS-level Threads and Asyncio tasks.
+* **Modular Benchmark Framework & Data Handlers**:
+    * Completely overhauled the `benchmarks` directory to strictly follow DRY principles using Object-Oriented design.
+    * Introduced `benchmark_base.py` containing `BenchmarkerBase` and `AsyncBenchmarkerBase` template classes.
+    * Extracted all performance scenarios into a centralized `benchmark_scenario.py` module (`IOBoundScenario`, `CPUBoundScenario`, etc.).
+    * **Advanced Data Handling**: Replaced hardcoded console output with a Dependency Injection architecture (`BenchmarkDataHandler` and `BenchmarkPrintHandler`). This allows benchmark outputs to be easily captured as structural dictionaries (`dict`) for JSON/CSV reporting or natively printed to the console.
+    * This drastically reduces boilerplate code and makes future performance testing highly extensible.
+
+### Fixed
+* **Critical Memory Leak in Async Wait Queues**:
+    * Fixed a bug in `_AsyncWaitQueue.notify_all()` that left completed `asyncio.Future` objects lingering in memory.
+    * Added a strict `waiters.clear()` step after broadcasting. This completely stops O(N) performance slowdowns and prevents memory usage from infinitely ballooning when `notify_all()` is called frequently.
+
+<br>
+
 ## **[3.0] - 04.03.2026**
 The **"Zero Friction & Drop-in Replacement"** update. This version marks a major architectural leap by bypassing internal library overheads, introducing true O(1) broadcast clearing, and achieving 100% API parity with Python's standard concurrency primitives.
 

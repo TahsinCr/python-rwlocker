@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rwlocker"
-version = "3.0"
+version = "3.1"
 description = "Advanced, High-Performance, and State-Machine Based Synchronous/Asynchronous Read-Write Locks."
 readme = {file = "README-pypi.md", content-type = "text/markdown"}
 license = {text = "MIT"}

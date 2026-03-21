@@ -123,6 +123,33 @@ class BaseConditionTests:
         # ensures the test doesn't hang.
         self.assertEqual(wait_count, 4, "Eventually all threads must complete.")
 
+    def test_massive_notify_all_cache_stampede_resilience(self):
+        wait_count = 0
+        event_happened = False
+        lock = threading.Lock()
+
+        def waiter_thread():
+            nonlocal wait_count
+            with self.condition.read:
+                self.condition.read.wait_for(lambda: event_happened)
+                with lock:
+                    wait_count += 1
+
+        threads = [threading.Thread(target=waiter_thread) for _ in range(100)]
+        for t in threads:
+            t.start()
+
+        time.sleep(0.2) 
+
+        with self.condition.write:
+            event_happened = True
+            self.condition.write.notify_all()
+
+        for t in threads:
+            t.join()
+
+        self.assertEqual(wait_count, 100, "All 100 threads must wake up correctly during a massive broadcast without deadlocks.")
+
     def test_wait_timeout(self):
         with self.condition.read:
             start_time = time.monotonic()

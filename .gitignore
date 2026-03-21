@@ -3,6 +3,7 @@ venv/
 .venv/
 env/
 .env/
+.python-version
 
 __pycache__/
 *.py[cod]

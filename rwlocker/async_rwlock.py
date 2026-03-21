@@ -38,7 +38,9 @@ from abc import ABC, abstractmethod
 from typing import Callable, Protocol, Optional
 from types import TracebackType
 
-__version__ = '3.0'
+from . import mixins
+
+__version__ = '3.1'
 __all__ = (
     'AsyncLockable', 'AsyncLockDowngradable', 'AsyncRWLockBase', 'AsyncRWLockWithProxyBase', 
     'AsyncRWLockProxy', 'AsyncRWLockReaderProxy', 'AsyncRWLockWriterProxy',
@@ -180,6 +182,7 @@ class _AsyncWaitQueue:
         for fut in waiters:
             if not fut.done():
                 fut.set_result(True)
+        waiters.clear()
 
 class AsyncRWLockProxy:
     """
@@ -299,15 +302,16 @@ class AsyncRWLockWriterProxy(AsyncRWLockProxy):
         the release logic to the reader core, avoiding Deadlocks and RuntimeErrors.
         """
         if self._downgraded_tasks: 
-            task = asyncio.current_task()
-            if task in self._downgraded_tasks:
-                self._downgraded_tasks.remove(task)
+            try:
+                self._downgraded_tasks.remove(asyncio.current_task())
                 self._read_lock._release_core()
                 return
+            except KeyError:
+                pass
         self._release_core()
 
 # Read and Write Lock
-class AsyncRWLockWrite(AsyncRWLockWithProxyBase):
+class AsyncRWLockWrite(mixins._RWLockWriteMixin, AsyncRWLockWithProxyBase):
     """
     Write-preferring Asynchronous Read-Write Lock.
     
@@ -343,55 +347,8 @@ class AsyncRWLockWrite(AsyncRWLockWithProxyBase):
         super().__init__()
         self._writer_active = False
         self._readers_active = 0
-
-    def _can_read(self) -> bool:
-        return not self._writer_active and self.write.those_waiting == 0
-    
-    def _acquire_read_core(self):
-        self._readers_active += 1
-
-    def _release_read_core(self):
-        if self._readers_active == 0:
-            raise RuntimeError("Unacquired read lock")
-        self._readers_active -= 1
-        if self._readers_active == 0:
-            self.write.condition.notify()
-
-    def _on_reader_abort(self):
-        pass
-
-    def _can_write(self) -> bool: 
-        return not self._writer_active and self._readers_active == 0
-    
-    def _acquire_write_core(self): 
-        self._writer_active = True
         
-    def _release_write_core(self):
-        if not self._writer_active: 
-            raise RuntimeError("Unacquired write lock")
-        self._writer_active = False
-        self._on_writer_abort()
-
-    def _downgrade_core(self):
-        if not self._writer_active: 
-            raise RuntimeError("Cannot downgrade unlocked lock")
-        self._writer_active = False
-        self._readers_active += 1
-        self.read.condition.notify_all()
-
-    def _on_writer_abort(self):
-        if self.write.those_waiting > 0: 
-            self.write.condition.notify()
-        else: 
-            self.read.condition.notify_all()
-
-    def _is_write_locked(self) -> bool: 
-        return self._writer_active
-    
-    def _is_read_locked(self) -> bool:
-        return self._readers_active > 0
-
-class AsyncRWLockWriteReentrantWriter(AsyncRWLockWrite):
+class AsyncRWLockWriteReentrantWriter(mixins._RWLockWriteReentrantMixin, AsyncRWLockWrite):
     """
     Write-preferring Asynchronous Read-Write Lock with Task-Reentrancy.
     
@@ -434,40 +391,16 @@ class AsyncRWLockWriteReentrantWriter(AsyncRWLockWrite):
         self._writer_id: Optional[asyncio.Task] = None
         self._write_count: int = 0
 
-    def _can_read(self) -> bool:
-        if self._writer_id is asyncio.current_task(): 
-            return True
-        return self._writer_id is None and self.write.those_waiting == 0
-
-    def _can_write(self) -> bool:
-        return (self._writer_id is None and self._readers_active == 0) or self._writer_id is asyncio.current_task()
-    
-    def _acquire_write_core(self):
+    def _is_current_writer(self) -> bool:
+        return self._writer_id is asyncio.current_task()
+        
+    def _set_current_writer(self) -> None:
         self._writer_id = asyncio.current_task()
-        self._write_count += 1
-
-    def _release_write_core(self):
-        if self._writer_id is not asyncio.current_task():
-            raise RuntimeError("Permission denied")
-        self._write_count -= 1
-        if self._write_count == 0:
-            self._writer_id = None
-            self._on_writer_abort()
-
-    def _downgrade_core(self):
-        if self._writer_id is not asyncio.current_task():
-            raise RuntimeError("Permission denied")
-        if self._write_count > 1:
-            raise RuntimeError("Cannot downgrade a nested write lock.")
+        
+    def _clear_current_writer(self) -> None:
         self._writer_id = None
-        self._write_count = 0
-        self._readers_active += 1
-        self.read.condition.notify_all()
 
-    def _is_write_locked(self) -> bool: 
-        return self._writer_id is not None
-
-class AsyncRWLockRead(AsyncRWLockWithProxyBase):
+class AsyncRWLockRead(mixins._RWLockReadMixin, AsyncRWLockWithProxyBase):
     """
     Read-preferring Asynchronous Read-Write Lock.
     
@@ -503,55 +436,8 @@ class AsyncRWLockRead(AsyncRWLockWithProxyBase):
         super().__init__()
         self._writer_active = False
         self._readers_active = 0
-
-    def _can_read(self) -> bool:
-        return not self._writer_active
-    
-    def _acquire_read_core(self):
-        self._readers_active += 1
-
-    def _release_read_core(self):
-        if self._readers_active == 0:
-            raise RuntimeError("Unacquired read lock")
-        self._readers_active -= 1
-        if self._readers_active == 0:
-            self.write.condition.notify()
-
-    def _on_reader_abort(self):
-        if self.read.those_waiting == 0 and self._readers_active == 0:
-            self.write.condition.notify()
-
-    def _can_write(self) -> bool: 
-        return not self._writer_active and self._readers_active == 0 and self.read.those_waiting == 0
-    
-    def _acquire_write_core(self):
-        self._writer_active = True
-
-    def _release_write_core(self):
-        if not self._writer_active:
-            raise RuntimeError("Unacquired write lock")
-        self._writer_active = False
-        self._on_writer_abort()
-    def _downgrade_core(self):
-        if not self._writer_active:
-            raise RuntimeError("Cannot downgrade unlocked lock")
-        self._writer_active = False
-        self._readers_active += 1
-        self.read.condition.notify_all()
-
-    def _on_writer_abort(self):
-        if self.read.those_waiting > 0:
-            self.read.condition.notify_all()
-        else: 
-            self.write.condition.notify()
-
-    def _is_write_locked(self) -> bool: 
-        return self._writer_active
-    
-    def _is_read_locked(self) -> bool:
-        return self._readers_active > 0
-
-class AsyncRWLockReadReentrantWriter(AsyncRWLockRead):
+        
+class AsyncRWLockReadReentrantWriter(mixins._RWLockReadReentrantMixin, AsyncRWLockRead):
     """
     Read-preferring Asynchronous Read-Write Lock with Task-Reentrancy.
     
@@ -592,40 +478,16 @@ class AsyncRWLockReadReentrantWriter(AsyncRWLockRead):
         self._writer_id: Optional[asyncio.Task] = None
         self._write_count: int = 0
 
-    def _can_read(self) -> bool:
-        if self._writer_id is asyncio.current_task():
-            return True
-        return self._writer_id is None
-
-    def _can_write(self) -> bool:
-        return (self._writer_id is None and self._readers_active == 0 and self.read.those_waiting == 0) or self._writer_id is asyncio.current_task()
-    
-    def _acquire_write_core(self):
-        self._writer_id = asyncio.current_task()
-        self._write_count += 1
-
-    def _release_write_core(self):
-        if self._writer_id is not asyncio.current_task():
-            raise RuntimeError("Permission denied")
-        self._write_count -= 1
-        if self._write_count == 0:
-            self._writer_id = None
-            self._on_writer_abort()
-
-    def _downgrade_core(self):
-        if self._writer_id is not asyncio.current_task():
-            raise RuntimeError("Permission denied")
-        if self._write_count > 1:
-            raise RuntimeError("Cannot downgrade a nested write lock.")
-        self._writer_id = None
-        self._write_count = 0
-        self._readers_active += 1
-        self.read.condition.notify_all()
+    def _is_current_writer(self) -> bool:
+        return self._writer_id is asyncio.current_task()
         
-    def _is_write_locked(self) -> bool:
-        return self._writer_id is not None
+    def _set_current_writer(self) -> None:
+        self._writer_id = asyncio.current_task()
+        
+    def _clear_current_writer(self) -> None:
+        self._writer_id = None
 
-class AsyncRWLockFair(AsyncRWLockWithProxyBase):
+class AsyncRWLockFair(mixins._RWLockFairMixin, AsyncRWLockWithProxyBase):
     """
     Fair (First-In-First-Out) Asynchronous Read-Write Lock.
     
@@ -662,66 +524,8 @@ class AsyncRWLockFair(AsyncRWLockWithProxyBase):
         self._writer_active = False
         self._readers_turn = False
         self._readers_active = 0
-
-    def _can_read(self) -> bool:
-        if self._writer_active: 
-            return False
-        return self._readers_turn or self.write.those_waiting == 0
-    
-    def _acquire_read_core(self):
-        self._readers_active += 1
-
-    def _release_read_core(self):
-        if self._readers_active == 0:
-            raise RuntimeError("Unacquired read lock")
-        self._readers_active -= 1
-        if self._readers_active == 0:
-            self._readers_turn = False
-            self.write.condition.notify()
-
-    def _on_reader_abort(self):
-        if self._readers_turn and self.read.those_waiting == 0 and self._readers_active == 0:
-            self._readers_turn = False
-            self.write.condition.notify()
-
-    def _can_write(self) -> bool:
-        if self._writer_active or self._readers_active > 0:
-            return False
-        if self._readers_turn and self.read.those_waiting > 0:
-            return False
-        return True
-    
-    def _acquire_write_core(self):
-        self._writer_active = True
-
-    def _release_write_core(self):
-        if not self._writer_active:
-            raise RuntimeError("Unacquired write lock")
-        self._writer_active = False
-        self._on_writer_abort()
-
-    def _downgrade_core(self):
-        if not self._writer_active:
-            raise RuntimeError("Cannot downgrade unlocked lock")
-        self._writer_active = False
-        self._readers_active += 1
-        self._readers_turn = True
-        self.read.condition.notify_all()
-
-    def _on_writer_abort(self):
-        if self.read.those_waiting > 0:
-            self._readers_turn = True
-            self.read.condition.notify_all()
-        else:
-            self.write.condition.notify()
-
-    def _is_write_locked(self) -> bool:
-        return self._writer_active
-    
-    def _is_read_locked(self) -> bool:
-        return self._readers_active > 0
-
-class AsyncRWLockFairReentrantWriter(AsyncRWLockFair):
+        
+class AsyncRWLockFairReentrantWriter(mixins._RWLockFairReentrantMixin, AsyncRWLockFair):
     """
     Fair (First-In-First-Out) Asynchronous Read-Write Lock with Task-Reentrancy.
     
@@ -762,47 +566,14 @@ class AsyncRWLockFairReentrantWriter(AsyncRWLockFair):
         self._writer_id: Optional[asyncio.Task] = None
         self._write_count: int = 0
 
-    def _can_read(self) -> bool:
-        if self._writer_id is asyncio.current_task():
-            return True
-        if self._writer_id is not None:
-            return False
-        return self._readers_turn or self.write.those_waiting == 0
-
-    def _can_write(self) -> bool:
-        if self._writer_id is asyncio.current_task():
-            return True
-        if self._writer_id is not None or self._readers_active > 0:
-            return False
-        if self._readers_turn and self.read.those_waiting > 0:
-            return False
-        return True
-    
-    def _acquire_write_core(self):
-        self._writer_id = asyncio.current_task()
-        self._write_count += 1
+    def _is_current_writer(self) -> bool:
+        return self._writer_id is asyncio.current_task()
         
-    def _release_write_core(self):
-        if self._writer_id is not asyncio.current_task():
-            raise RuntimeError("Permission denied")
-        self._write_count -= 1
-        if self._write_count == 0:
-            self._writer_id = None
-            self._on_writer_abort()
-
-    def _downgrade_core(self):
-        if self._writer_id is not asyncio.current_task():
-            raise RuntimeError("Permission denied")
-        if self._write_count > 1:
-            raise RuntimeError("Cannot downgrade a nested write lock.")
+    def _set_current_writer(self) -> None:
+        self._writer_id = asyncio.current_task()
+        
+    def _clear_current_writer(self) -> None:
         self._writer_id = None
-        self._write_count = 0
-        self._readers_active += 1
-        self._readers_turn = True
-        self.read.condition.notify_all()
-
-    def _is_write_locked(self) -> bool:
-        return self._writer_id is not None
 
 # Standart Lock Adapter
 class AsyncLock(AsyncRWLockBase):
@@ -1163,7 +934,7 @@ class AsyncRWConditionWriterProxy(AsyncRWConditionProxy):
         self._lock_proxy.downgrade()
 
 # Read Write Lock For Condition
-class AsyncRWCondition(AsyncRWConditionWithProxyBase):
+class AsyncRWCondition(mixins._RWConditionMixin, AsyncRWConditionWithProxyBase):
     """
     Standard implementation of an Asynchronous Read-Write Condition variable.
     
@@ -1206,12 +977,6 @@ class AsyncRWCondition(AsyncRWConditionWithProxyBase):
         self._waiters: deque[asyncio.Future] = deque()
         super().__init__(lock)
     
-    def _is_owned_read(self) -> bool:
-        return self._lock._is_read_locked()
-
-    def _is_owned_write(self) -> bool:
-        return self._lock._is_write_locked()
-
     def _add_waiter(self) -> asyncio.Future:
         loop = asyncio.get_running_loop()
         waiter = loop.create_future()

@@ -64,4 +64,4 @@ Basic Example:
 from .thread_rwlock import *
 from .async_rwlock import *
 
-__version__ = '3.0'
+__version__ = '3.1'

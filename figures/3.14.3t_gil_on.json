@@ -1,0 +1,536 @@
+[
+    {
+        "scenario_name": "Read-Heavy (2 Writer, 100 Readers)",
+        "readers": 100,
+        "writers": 2,
+        "iterations": 10,
+        "target_type": "Lock Implementation",
+        "baseline_time": 1.3856231840036344,
+        "results": [
+            {
+                "name": "RWLockReadReentrantWriter",
+                "elapsed": 0.08920432000013534,
+                "throughput": 11434.423803672877,
+                "speedup": 15.533139919698195
+            },
+            {
+                "name": "RWLockRead",
+                "elapsed": 0.09279650599637534,
+                "throughput": 10991.79316126236,
+                "speedup": 14.931846507860513
+            },
+            {
+                "name": "RWLockFairReentrantWriter",
+                "elapsed": 0.09437628600426251,
+                "throughput": 10807.799747003517,
+                "speedup": 14.681899899526165
+            },
+            {
+                "name": "RWLockFair",
+                "elapsed": 0.10059041600470664,
+                "throughput": 10140.131043421414,
+                "speedup": 13.774902610391837
+            },
+            {
+                "name": "RWLockWriteReentrantWriter",
+                "elapsed": 0.10902162699494511,
+                "throughput": 9355.941826545051,
+                "speedup": 12.709617552009934
+            },
+            {
+                "name": "RWLockWrite",
+                "elapsed": 0.11024890399858123,
+                "throughput": 9251.792652860533,
+                "speedup": 12.568135679802003
+            },
+            {
+                "name": "threading.Lock (C-Baseline)",
+                "elapsed": 1.3650905399990734,
+                "throughput": 747.2031855122901,
+                "speedup": 1.0150412323599978
+            },
+            {
+                "name": "threading.RLock (C-Baseline)",
+                "elapsed": 1.3856231840036344,
+                "throughput": 736.130870048523,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Balanced (50 Writers, 50 Readers)",
+        "readers": 50,
+        "writers": 50,
+        "iterations": 10,
+        "target_type": "Lock Implementation",
+        "baseline_time": 1.365865756997664,
+        "results": [
+            {
+                "name": "RWLockRead",
+                "elapsed": 0.6873926429980202,
+                "throughput": 1454.7726254947424,
+                "speedup": 1.9870241133808555
+            },
+            {
+                "name": "RWLockFair",
+                "elapsed": 0.6920319759956328,
+                "throughput": 1445.0199335966965,
+                "speedup": 1.973703245478766
+            },
+            {
+                "name": "RWLockReadReentrantWriter",
+                "elapsed": 0.6922582609986421,
+                "throughput": 1444.5475862684743,
+                "speedup": 1.9730580824377382
+            },
+            {
+                "name": "RWLockFairReentrantWriter",
+                "elapsed": 0.6944636859989259,
+                "throughput": 1439.9601018181195,
+                "speedup": 1.9667921945162392
+            },
+            {
+                "name": "RWLockWriteReentrantWriter",
+                "elapsed": 0.699128711996309,
+                "throughput": 1430.3517833569956,
+                "speedup": 1.9536685213478615
+            },
+            {
+                "name": "RWLockWrite",
+                "elapsed": 0.70105087000411,
+                "throughput": 1426.4300106982782,
+                "speedup": 1.94831190636659
+            },
+            {
+                "name": "threading.Lock (C-Baseline)",
+                "elapsed": 1.3604710190047626,
+                "throughput": 735.0395458857615,
+                "speedup": 1.0039653457644748
+            },
+            {
+                "name": "threading.RLock (C-Baseline)",
+                "elapsed": 1.365865756997664,
+                "throughput": 732.1363720239384,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Write-Heavy (100 Writers, 2 Readers)",
+        "readers": 2,
+        "writers": 100,
+        "iterations": 10,
+        "target_type": "Lock Implementation",
+        "baseline_time": 1.4067406659960398,
+        "results": [
+            {
+                "name": "RWLockWrite",
+                "elapsed": 1.296702881998499,
+                "throughput": 786.6104210611146,
+                "speedup": 1.084859674120527
+            },
+            {
+                "name": "RWLockRead",
+                "elapsed": 1.3050264150006115,
+                "throughput": 781.5933748739653,
+                "speedup": 1.0779403771649945
+            },
+            {
+                "name": "RWLockFairReentrantWriter",
+                "elapsed": 1.308605444006389,
+                "throughput": 779.4557211050545,
+                "speedup": 1.0749922159036744
+            },
+            {
+                "name": "RWLockFair",
+                "elapsed": 1.312305989995366,
+                "throughput": 777.2577491653466,
+                "speedup": 1.0719608663837672
+            },
+            {
+                "name": "RWLockReadReentrantWriter",
+                "elapsed": 1.315808161998575,
+                "throughput": 775.1889898985933,
+                "speedup": 1.0691077214928868
+            },
+            {
+                "name": "RWLockWriteReentrantWriter",
+                "elapsed": 1.3162115480008652,
+                "throughput": 774.9514138127965,
+                "speedup": 1.0687800666486138
+            },
+            {
+                "name": "threading.Lock (C-Baseline)",
+                "elapsed": 1.404107987997122,
+                "throughput": 726.4398527174326,
+                "speedup": 1.001874982566457
+            },
+            {
+                "name": "threading.RLock (C-Baseline)",
+                "elapsed": 1.4067406659960398,
+                "throughput": 725.0803397211747,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Read-Heavy (2 Writer, 100 Readers)",
+        "readers": 100,
+        "writers": 2,
+        "iterations": 10,
+        "target_type": "Lock Implementation",
+        "baseline_time": 1.2878727100032847,
+        "results": [
+            {
+                "name": "AsyncRWLockReadReentrantWriter",
+                "elapsed": 0.04165835599997081,
+                "throughput": 24484.88365697184,
+                "speedup": 30.91511124452888
+            },
+            {
+                "name": "AsyncRWLockFair",
+                "elapsed": 0.04204050300177187,
+                "throughput": 24262.31674623423,
+                "speedup": 30.63409374404976
+            },
+            {
+                "name": "AsyncRWLockFairReentrantWriter",
+                "elapsed": 0.04251585799647728,
+                "throughput": 23991.04823627254,
+                "speedup": 30.291584615556705
+            },
+            {
+                "name": "AsyncRWLockRead",
+                "elapsed": 0.042710187000920996,
+                "throughput": 23881.89028481671,
+                "speedup": 30.15375956971374
+            },
+            {
+                "name": "AsyncRWLockWrite",
+                "elapsed": 0.04398275799758267,
+                "throughput": 23190.905855791494,
+                "speedup": 29.28130859993062
+            },
+            {
+                "name": "AsyncRWLockWriteReentrantWriter",
+                "elapsed": 0.044567541997821536,
+                "throughput": 22886.611068877384,
+                "speedup": 28.8970998235944
+            },
+            {
+                "name": "asyncio.Lock (C-Baseline)",
+                "elapsed": 1.2878727100032847,
+                "throughput": 792.0037376965605,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Balanced (50 Writers, 50 Readers)",
+        "readers": 50,
+        "writers": 50,
+        "iterations": 10,
+        "target_type": "Lock Implementation",
+        "baseline_time": 1.2575755639991257,
+        "results": [
+            {
+                "name": "AsyncRWLockRead",
+                "elapsed": 0.6377188740007114,
+                "throughput": 1568.0890761888984,
+                "speedup": 1.971990504389122
+            },
+            {
+                "name": "AsyncRWLockReadReentrantWriter",
+                "elapsed": 0.6398237710018293,
+                "throughput": 1562.9303650819515,
+                "speedup": 1.9655030353592946
+            },
+            {
+                "name": "AsyncRWLockFairReentrantWriter",
+                "elapsed": 0.6415221619972726,
+                "throughput": 1558.7926017811546,
+                "speedup": 1.9602994853426001
+            },
+            {
+                "name": "AsyncRWLockWriteReentrantWriter",
+                "elapsed": 0.6438508329956676,
+                "throughput": 1553.1547817485373,
+                "speedup": 1.9532095006353558
+            },
+            {
+                "name": "AsyncRWLockFair",
+                "elapsed": 0.6469326349979383,
+                "throughput": 1545.7559966860954,
+                "speedup": 1.943904969337547
+            },
+            {
+                "name": "AsyncRWLockWrite",
+                "elapsed": 0.6598101810013759,
+                "throughput": 1515.58740497506,
+                "speedup": 1.9059656856014826
+            },
+            {
+                "name": "asyncio.Lock (C-Baseline)",
+                "elapsed": 1.2575755639991257,
+                "throughput": 795.1808452924863,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Write-Heavy (100 Writers, 2 Readers)",
+        "readers": 2,
+        "writers": 100,
+        "iterations": 10,
+        "target_type": "Lock Implementation",
+        "baseline_time": 1.2749868989994866,
+        "results": [
+            {
+                "name": "AsyncRWLockFair",
+                "elapsed": 1.2606448030055617,
+                "throughput": 809.1097488905446,
+                "speedup": 1.0113767938119693
+            },
+            {
+                "name": "AsyncRWLockReadReentrantWriter",
+                "elapsed": 1.2621378599942545,
+                "throughput": 808.1526054567789,
+                "speedup": 1.0101803768134257
+            },
+            {
+                "name": "AsyncRWLockFairReentrantWriter",
+                "elapsed": 1.2634248059985111,
+                "throughput": 807.3294074623401,
+                "speedup": 1.0091513898936293
+            },
+            {
+                "name": "AsyncRWLockWrite",
+                "elapsed": 1.2644509050005581,
+                "throughput": 806.6742615044827,
+                "speedup": 1.0083324658610797
+            },
+            {
+                "name": "AsyncRWLockWriteReentrantWriter",
+                "elapsed": 1.2651017070020316,
+                "throughput": 806.2592867866251,
+                "speedup": 1.007813752793742
+            },
+            {
+                "name": "AsyncRWLockRead",
+                "elapsed": 1.2701824229952763,
+                "throughput": 803.0342583348702,
+                "speedup": 1.0037825086516947
+            },
+            {
+                "name": "asyncio.Lock (C-Baseline)",
+                "elapsed": 1.2749868989994866,
+                "throughput": 800.0082203200825,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Read-Heavy (2 Writer, 100 Readers)",
+        "readers": 100,
+        "writers": 2,
+        "iterations": 10,
+        "target_type": "Condition Implementation",
+        "baseline_time": 1.4406901609982015,
+        "results": [
+            {
+                "name": "RWCondition (Write-Pref)",
+                "elapsed": 0.10440413399919635,
+                "throughput": 9769.728083830967,
+                "speedup": 13.79916777059126
+            },
+            {
+                "name": "RWCondition (Read-Pref)",
+                "elapsed": 0.16063453600509092,
+                "throughput": 6349.8175757651115,
+                "speedup": 8.968744809351223
+            },
+            {
+                "name": "RWCondition (Fair)",
+                "elapsed": 0.20742029899702175,
+                "throughput": 4917.551488124341,
+                "speedup": 6.94575298543412
+            },
+            {
+                "name": "threading.Condition (C-Baseline)",
+                "elapsed": 1.4406901609982015,
+                "throughput": 707.9940070481771,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Balanced (50 Writers, 50 Readers)",
+        "readers": 50,
+        "writers": 50,
+        "iterations": 10,
+        "target_type": "Condition Implementation",
+        "baseline_time": 1.465118062995316,
+        "results": [
+            {
+                "name": "RWCondition (Write-Pref)",
+                "elapsed": 0.6908487410037196,
+                "throughput": 1447.494857625594,
+                "speedup": 2.120750862000091
+            },
+            {
+                "name": "threading.Condition (C-Baseline)",
+                "elapsed": 1.465118062995316,
+                "throughput": 682.5388514803923,
+                "speedup": 1.0
+            },
+            {
+                "name": "RWCondition (Read-Pref)",
+                "elapsed": 1.6262450579961296,
+                "throughput": 614.9134751143883,
+                "speedup": 0.900920839569311
+            },
+            {
+                "name": "RWCondition (Fair)",
+                "elapsed": 2.2778220910040545,
+                "throughput": 439.0158493718024,
+                "speedup": 0.6432100508558586
+            }
+        ]
+    },
+    {
+        "scenario_name": "Write-Heavy (100 Writers, 2 Readers)",
+        "readers": 2,
+        "writers": 100,
+        "iterations": 10,
+        "target_type": "Condition Implementation",
+        "baseline_time": 1.4135002980037825,
+        "results": [
+            {
+                "name": "RWCondition (Write-Pref)",
+                "elapsed": 1.305054950993508,
+                "throughput": 781.5762847560538,
+                "speedup": 1.08309638374056
+            },
+            {
+                "name": "threading.Condition (C-Baseline)",
+                "elapsed": 1.4135002980037825,
+                "throughput": 721.6128651974791,
+                "speedup": 1.0
+            },
+            {
+                "name": "RWCondition (Read-Pref)",
+                "elapsed": 2.000097245996585,
+                "throughput": 509.9752034765521,
+                "speedup": 0.7067157863614176
+            },
+            {
+                "name": "RWCondition (Fair)",
+                "elapsed": 2.7343384900013916,
+                "throughput": 373.03355225763613,
+                "speedup": 0.5169441541976257
+            }
+        ]
+    },
+    {
+        "scenario_name": "Read-Heavy (2 Writer, 100 Readers)",
+        "readers": 100,
+        "writers": 2,
+        "iterations": 10,
+        "target_type": "Condition Implementation",
+        "baseline_time": 1.2712893260031706,
+        "results": [
+            {
+                "name": "AsyncRWCondition (Write-Pref)",
+                "elapsed": 0.028987113997573033,
+                "throughput": 35188.0494238026,
+                "speedup": 43.85705062289437
+            },
+            {
+                "name": "AsyncRWCondition (Read-Pref)",
+                "elapsed": 0.047641334000218194,
+                "throughput": 21409.979829601925,
+                "speedup": 26.68458708560403
+            },
+            {
+                "name": "AsyncRWCondition (Fair)",
+                "elapsed": 0.06515048399887746,
+                "throughput": 15656.061741883215,
+                "speedup": 19.513121744806604
+            },
+            {
+                "name": "asyncio.Condition (C-Baseline)",
+                "elapsed": 1.2712893260031706,
+                "throughput": 802.3350618437082,
+                "speedup": 1.0
+            }
+        ]
+    },
+    {
+        "scenario_name": "Balanced (50 Writers, 50 Readers)",
+        "readers": 50,
+        "writers": 50,
+        "iterations": 10,
+        "target_type": "Condition Implementation",
+        "baseline_time": 1.2522696229934809,
+        "results": [
+            {
+                "name": "AsyncRWCondition (Write-Pref)",
+                "elapsed": 0.6322791620041244,
+                "throughput": 1581.5798781511592,
+                "speedup": 1.9805644377464273
+            },
+            {
+                "name": "AsyncRWCondition (Read-Pref)",
+                "elapsed": 1.067691495998588,
+                "throughput": 936.6001356643966,
+                "speedup": 1.172875898784097
+            },
+            {
+                "name": "asyncio.Condition (C-Baseline)",
+                "elapsed": 1.2522696229934809,
+                "throughput": 798.5500739126417,
+                "speedup": 1.0
+            },
+            {
+                "name": "AsyncRWCondition (Fair)",
+                "elapsed": 1.4436048379939166,
+                "throughput": 692.7103412798441,
+                "speedup": 0.8674601179181959
+            }
+        ]
+    },
+    {
+        "scenario_name": "Write-Heavy (100 Writers, 2 Readers)",
+        "readers": 2,
+        "writers": 100,
+        "iterations": 10,
+        "target_type": "Condition Implementation",
+        "baseline_time": 1.2801918999975896,
+        "results": [
+            {
+                "name": "AsyncRWCondition (Write-Pref)",
+                "elapsed": 1.2376221749946126,
+                "throughput": 824.1610570725594,
+                "speedup": 1.0343963819193547
+            },
+            {
+                "name": "asyncio.Condition (C-Baseline)",
+                "elapsed": 1.2801918999975896,
+                "throughput": 796.7555489156903,
+                "speedup": 1.0
+            },
+            {
+                "name": "AsyncRWCondition (Read-Pref)",
+                "elapsed": 1.8680673950002529,
+                "throughput": 546.018844250457,
+                "speedup": 0.685302844760275
+            },
+            {
+                "name": "AsyncRWCondition (Fair)",
+                "elapsed": 2.4871476590051316,
+                "throughput": 410.1083408968183,
+                "speedup": 0.5147229177819186
+            }
+        ]
+    }
+]

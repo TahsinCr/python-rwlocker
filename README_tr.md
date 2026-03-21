@@ -5,7 +5,7 @@
 [![MIT License][license-shield]][license-url]
 [![LinkedIn][linkedin-shield]][linkedin-url]
 
-[Türkçe][lang-tr-url] | [English][lang-en-url]
+[Türkçe][lang-tr-url] | [English][lang-en-url] | [Русский][lang-ru-url]
 
 
 
@@ -27,7 +27,7 @@ Gelişmiş, Yüksek Performanslı ve Durum Makinesi (State-Machine) Tabanlı Sen
 
 <br/>
 
-## 📋 Proje hakkında
+## 📋 Proje Hakkında
 
 ### 🚀 Neden RWLocker?
 
@@ -38,19 +38,19 @@ Python'daki standart kilitler (`Lock`, `RLock`) **Exclusive (Dışlayıcı)** ki
 ### 🚀 Peki ya Condition (Durum) Değişkenleri?
 Standart kütüphanedeki `Condition` yapıları, `notify_all()` çağrıldığında bekleyen tüm thread/task'ları O(N) zaman karmaşıklığıyla (tek tek tarayarak) uyandırır. Bu durum, yüzlerce okuyucunun aynı anda uyandığı senaryolarda işlemciyi kilitleyen **"Önbellek İzdihamı" (Cache Stampede)** yaratır. `rwlocker`, tamamen `deque` (Thread) ve `dict` (Asyncio) tabanlı kuyruk mimarisiyle çalışır. Bekleyen görevleri işletim sistemini veya event-loop'u bloklamadan saf **O(1) zaman karmaşıklığında** uyandırarak izdihamları mimari seviyede yok eder.
 
-### ✨ Temel Özellikleri
+### ✨ Temel Özellikler
 
 * **Hem Thread Hem Asyncio Desteği:** Aynı API mantığıyla hem standart işletim sistemi thread'lerini (`rwlocker.thread_rwlock`) hem de event-loop tabanlı task'ları (`rwlocker.async_rwlock`) yönetebilirsiniz.
-* **Akıllı Proxy Mimarisi:** `.read` ve `.write` proxy'leri ile `with` ve `async with` context manager'larını sezgisel olarak kullanma imkanı.
+* **Akıllı Proxy Mimarisi (Smart Proxy Architecture):** `.read` ve `.write` proxy'leri ile `with` ve `async with` context manager'larını sezgisel olarak kullanma imkanı.
 * **Atomik Derece Düşürme (Downgrading):** Yazma kilidini tamamen serbest bırakmadan, araya başka bir yazar girmesine izin vermeden anında Okuma kilidine (`downgrade()`) düşürebilme özelliği.
 * **Güvenli İç İçe Geçme (Safe Reentrancy):** Aynı thread veya task'ın, Deadlock'a (ölümcül kilitlenme) sebep olmadan tekrar tekrar yazma kilidi alabilmesi için O(1) bellek işaretçisi (memory pointer) takibi.
 * **İptal Güvenliği (Cancellation Safety):** `asyncio` ortamındaki task iptallerine (`CancelledError`) karşı tam direnç. İptal edilen task'lar sistemi bozmaz, bekleyenleri güvenle uyandırır.
-* **O(1) Condition Kuyruklama (İzdiham Koruması):** `notify_all()` çağrılarında standart kütüphanelerin aksine O(N) tarama yapmaz. Yüzlerce görevi CPU'yu boğmadan anında uyandırır.
-* **Akıllı Sinyalleme (Smart Notification):** `notify(n=5)` gibi çağrılarla, sistemde "Thundering Herd" (sürü psikolojisi) yaratmadan sadece ihtiyacınız olan sayıda görevi isabetli bir şekilde uyandırma yeteneği.
+* **O(1) Condition Kuyruklama (Stampede Protection):** `notify_all()` çağrılarında standart kütüphanelerin aksine O(N) tarama yapmaz. Yüzlerce görevi CPU'yu boğmadan anında uyandırır.
+* **Akıllı Sinyalleme (Smart Signaling):** `notify(n=5)` gibi çağrılarla, sistemde "Thundering Herd" (sürü psikolojisi) yaratmadan sadece ihtiyacınız olan sayıda görevi isabetli bir şekilde uyandırma yeteneği.
 * **Kusursuz İptal Kalkanı (Cancellation Shielding):** Asenkron `Condition.wait()` bekleyişi sırasında task dışarıdan iptal edilirse (`CancelledError`), kilit durumu asla bozulmaz (corrupt olmaz). Kilit güvenle geri alınır ve diğer bekleyenlere devredilir.
 * **%100 Tak-Çalıştır (Drop-in Replacement):** Gelişmiş kilitlerinizi (`RWLockFair` vb.) hiçbir kod değişikliği yapmadan standart `threading.Lock` veya `asyncio.Lock` bekleyen üçüncü parti kütüphanelere (SQLAlchemy, requests, FastAPI vb.) doğrudan aktarabilirsiniz. Standart API çağrıları (örn. `lock.acquire()`) otomatik ve güvenli bir şekilde `.write` (exclusive) proxy'sine yönlendirilir.
-* **Mutlu Yol (Happy Path) İzolasyonu:** Başarılı kilit uyanmalarında O(N) maliyetli temizlik işlemlerini tamamen atlayan ve süreci sıfır işlemci maliyetiyle tamamlayan yeni nesil, işletim sistemi kesintilerine (OS-Interrupt) tam dayanıklı mikro-kuyruk mimarisi.
-* **Standart Adaptörler:** Gelişmiş RWLock özellikleri gerekmeyen ancak aynı mimari imzayı (`.read`, `.write`) taşımasını istediğiniz bağımlılık enjeksiyonları için `Lock`, `Condition`, `AsyncLock` ve `AsyncCondition` standart sarmalayıcı (wrapper) sınıfları.
+* **"Happy Path" Performans İzolasyonu:** Başarılı kilit uyanmalarında O(N) maliyetli temizlik işlemlerini tamamen atlayan ve süreci sıfır işlemci maliyetiyle tamamlayan yeni nesil, işletim sistemi kesintilerine (OS-Interrupt) tam dayanıklı mikro-kuyruk mimarisi.
+* **Standart Adaptörler (Standard Adapters):** Gelişmiş RWLock özellikleri gerekmeyen ancak aynı mimari imzayı (`.read`, `.write`) taşımasını istediğiniz bağımlılık enjeksiyonları için `Lock`, `Condition`, `AsyncLock` ve `AsyncCondition` standart sarmalayıcı (wrapper) sınıfları.
 
 ### 🛡️ Kilit Stratejileri
 
@@ -61,7 +61,7 @@ Sisteminizin darboğaz profiline göre doğru kilit stratejisini seçebilirsiniz
 | **Yazar Öncelikli** | `RWLockWrite` / `AsyncRWLockWrite` | Bekleyen bir yazar varsa, yeni okuyucuların girmesini yasaklar. Yazar açlığını (starvation) önler. | Okuma yoğun sistemlerde yazarların ezilmesini engellemek için. |
 | **Okur Öncelikli** | `RWLockRead` / `AsyncRWLockRead` | Yazarlar beklese bile yeni okuyucuları sürekli içeri alır. Maksimum paralellik sağlar. | Yazma işlemlerinin çok nadir veya önemsiz olduğu önbellek (cache) yapılarında. |
 | **Adil (Fair)** | `RWLockFair` / `AsyncRWLockFair` | Okur ve yazarlar arasında sırayla (fermuar gibi) geçiş hakkı tanır. İki tarafın da aç kalmasını engeller. | Yüksek frekanslı (MAVLink, WebSocket vb.) çift yönlü trafiklerde. |
-> 💡 **Condition (Durum) Uyumluluğu:** Kütüphanedeki `RWCondition` ve `AsyncRWCondition` sınıfları, yukarıdaki tüm kilit stratejilerini içine alacak şekilde (Dependency Injection) tasarlanmıştır. Sisteminize en uygun kilidi seçip, onu O(1) hızında bir durum makinesine dönüştürebilirsiniz.
+> 💡 **Condition Uyumluluğu (Condition Compatibility):** Kütüphanedeki `RWCondition` ve `AsyncRWCondition` sınıfları, yukarıdaki tüm kilit stratejilerini içine alacak şekilde (Dependency Injection) tasarlanmıştır. Sisteminize en uygun kilidi seçip, onu O(1) hızında bir durum makinesine dönüştürebilirsiniz.
 <br/>
 
 ## ⚙️ Mimari Sınırlamalar
@@ -78,40 +78,60 @@ Kilit sınıfları, akıllı proxy nesneleri (`.read` ve `.write`) oluştururken
 Eğer `Fair` (Adil) stratejisini kullanıyorsanız, sistem kimsenin aç kalmamasını (No Starvation) garanti altına almak için okuyucu ve yazarlar arasında katı bir sıraya dayalı bağlam değişimi (context switch) yapar. Özellikle **`RWCondition` (Durum Değişkeni)** kullanımlarında ve yazma yoğun (write-heavy) senaryolarda, bu adil sırayı koruma çabası, hiçbir kuralı olmayan standart C-tabanlı `Condition` nesnesine göre belirli bir yavaşlamaya sebep olur (Benchmark'larda Fair'nun 0.50x çıkmasının sebebi budur). Bu bir hata veya optimizasyon eksikliği değil, "adaleti" sağlamak için ödenmesi gereken mühendislik bedelidir.
 5. **Condition Bellek Maliyeti (Memory vs CPU Trade-off):**
 Standart `threading.Condition` arka planda basit bir C seviyesi sayaç tutarken; `rwlocker`, O(1) hızında uyanma garantisi verebilmek için bekleyen her bir task/thread için bellekte minik bir `Lock` veya `asyncio.Future` objesi saklar. Bu, CPU darboğazlarını (Cache Stampede) tamamen çözer ancak on binlerce görevin beklediği ekstrem durumlarda RAM üzerinde ufak bir bellek ayak izi (memory footprint) oluşturur.
-6. **Tak-Çalıştır (Drop-in) Güvenlik Varsayımı:**
+6. **Tak-Çalıştır (Drop-in) Güvenlik Varsayımı (Drop-in Security Assumption):**
 Kilit nesnelerini `.read` veya `.write` proxy'lerini belirtmeden, doğrudan standart bir kilit gibi kullanırsanız (örneğin `with lock:` veya `await cond.wait()`), sistem geriye dönük uyumluluk ve mutlak veri güvenliği sağlamak adına otomatik olarak **Yazma (Exclusive/Write)** kilidini alır. Bu, dış kütüphanelerin veriyi bozmasını engellemek için kurulan "Secure by Default" (Varsayılan Olarak Güvenli) bir yaklaşımdır.
 
 <br/>
 
 ## 📊 Performans ve Benchmark Sonuçları
 
-`rwlocker`, Python'un GIL (Global Interpreter Lock) mekanizmasının serbest bırakıldığı Ağ (Network) ve Veritabanı (DB) I/O işlemlerinde sistemin gerçek potansiyelini ortaya çıkarır. Sıfır işletim sistemi uyutma gürültüsüyle yapılan agresif senaryo testlerinde standart kilitleri ezici bir farkla geride bırakmıştır.
+Aşağıdaki benchmark sonuçları, Python'un GIL (Global Interpreter Lock) mekanizmasının serbest bırakıldığı veya bağlam değiştirildiği Ağ ve Veritabanı I/O işlemlerinde `rwlocker`'ın gerçek potansiyelini göstermektedir.
 
-**Özet Performans Çıktıları:**
+**🖥️ Test Ortamı:** Tüm testler **Intel Core i7-12700H (2.4GHz)** işlemci ve **EndeavourOS (Arch tabanlı Linux)** işletim sistemi üzerinde, **Python 3.14.3** ve deneysel **Free-Threading (3.14.3t)** yorumlayıcıları kullanılarak gerçekleştirilmiştir.
 
-* **🚀 Read-Heavy (Okuma Öncelikli) Senaryosu (100 Okur, 2 Yazar):**
-Standart kilitler okuyucuları tek sıraya dizip sistemi boğarken; `rwlocker` okuyucuların veriye aynı anda erişmesini sağlar. Bu sayede **Threading tarafında ~37 KAT**, **Asyncio tarafında ~30 KAT** daha yüksek hız ve işlem kapasitesi (throughput) elde edilir.
-* **⚖️ Balanced (Dengeli) Senaryosu (50 Okur, 50 Yazar):**
-Adil (Fair) durum makinesi sayesinde, yazma kuyruklarının arasına okuma işlemleri paralel olarak sıkıştırılır. Sistem darboğaza girmeden standart kilitlere göre performansı **2 KAT** artırır.
-* **🛡️ Write-Heavy (Yazma öncelikli) Senaryosu (2 Okur, 100 Yazar):**
-Yazma işlemleri doğası gereği eşzamanlı (paralel) yapılamamasına rağmen, `rwlocker`'ın sıfır tahsisli (zero-allocation) akıllı proxy mimarisi sayesinde standart `C` tabanlı kilitlerden bile **%7-8 oranında daha hızlı** çalışır. O(1) maliyetli "ReentrantWriter" (iç içe geçme) özelliği bile performansa neredeyse hiç yük bindirmez.
+**🧪 Test Metodolojisi:** Hata payını sıfıra indirmek ve mutlak hassasiyet sağlamak için, okuyucu ve yazar (reader/writer) olarak belirtilen tüm birimler (thread veya async task) önceden oluşturulur ve bir senkronizasyon `Event` (Olay) bariyerinde bekletilir. Olay tetiklendiği an hepsi aynı anda koşturulur. İş yükleri, gerçek ağ/veritabanı gecikmelerini simüle etmek için katı bir şekilde `time.sleep(0.001)` veya `asyncio.sleep(0.001)` işlemi uygulayan `IOBoundScenario` üzerinden test edilmiştir.
 
-**Condition (Durum Değişkeni) Performans Çıktıları:**
+### 1. Okuma-Yazma Kilidi (RWLock) Karşılaştırmaları
 
-Standart kütüphanedeki Condition yapıları O(N) tarama yaptığı için çoklu uyanmalarda CPU'yu kilitler. `rwlocker`'ın O(1) kuyruk mimarisi ise bu noktada standart kütüphaneyi adeta yok eder.
+Standart kilitler, sadece veri okuyor olsalar bile thread'leri tek bir sıraya girmeye zorlar. `rwlocker` ise eşzamanlı okuma erişimini serbest bırakır.
 
-* **📣 Massive Broadcast (Devasa Yayın - 1 Yazar, 100 Okur):**
-Tek bir yazar veri tabanını güncelleyip bekleyen yüzlerce okuyucuyu uyandırdığında (`notify_all`); O(1) mimarimiz sayesinde **Threading tarafında ~65 KAT**, **Asyncio tarafında ~70 KAT** daha hızlı işlem hacmi (Ops/sec) elde edilmiştir. Sistem "Önbellek İzdihamı"na girmekten kurtarılmıştır.
-* **🔀 Balanced Pub/Sub (50 Yazar, 50 Okur):**
-Karışık uyanma ve bekleme senaryolarında, `Write-Pref` stratejisine sahip Condition kilitlerimiz standart kütüphaneden **~2 KAT** daha hızlı çalışmıştır.
-* **📉 Write-Heavy Sınırı (Yazma Stres Testi - 100 Yazar, 2 Okur):**
-Yazarların sürekli birbirini bloklayıp `notify()` çağırdığı bu acımasız senaryoda, C-tabanlı standart kilitler hız avantajını kullanır. `rwlocker`'ın Write-Pref modeli standart kilitle kafa kafaya (1.0x) başa çıkarken, Fair ve Read-Pref modelleri adaleti sağlamak uğruna bilerek yavaşlar (0.5x - 0.7x).
+**Senkron (Thread) RWLock Performansı:**
+Read-Heavy (Okuma Yoğun) senaryolarda standart C tabanlı kilitler sistemi boğarken, `rwlocker` **~35 kata kadar hız artışı** sağlar. Paralelliğin doğası gereği mümkün olmadığı Write-Heavy (Yazma Yoğun) iş yüklerinde bile, sıfır tahsisli (zero-allocation) yapısı sayesinde standart kilide denktir.
+<p align="center">
+  <img src="./figures/sync_rwlock.svg" alt="Sync RWLock Benchmark" width="100%"/>
+</p>
+<br>
 
-*(Not: Tüm kilit, adaptör ve condition sınıfları; reentrancy, deadlock, timeout, OS kesintileri, O(N) kaçakları ve cancellation safety senaryolarını kapsayan devasa **266 farklı birim testinden (unit tests)** 0 hata ile geçmiş ve tüm bu test paketi yalnızca **8.5 saniyede** tamamlanmıştır.)*
+**Asenkron (Asyncio) RWLock Performansı:**
+Asenkron görevler tek bir event-loop üzerinde eşzamanlı çalıştığı için, yorumlayıcı modları (GIL açık/kapalı) sonuçları önemli ölçüde değiştirmez. Bu nedenle asenkron metriklerinde en yüksek performans gösteren ortam referans alınmıştır. Burada `rwlocker`, binlerce okuyucu görevinin aynı anda I/O beklemesine izin vererek **~30 kat daha yüksek işlem hacmi** (throughput) elde eder.
+<p align="center">
+  <img src="./figures/async_rwlock.svg" alt="Async RWLock Benchmark" width="100%"/>
+</p>
+<br>
+
+### 2. Durum Değişkeni (RWCondition) Karşılaştırmaları
+
+Standart `Condition` değişkenleri, yayın (`notify_all`) sırasında uyuyan tüm thread/task'ları tek tek tarayarak `O(N)` zaman harcar ve devasa işlemci (CPU) kilitlenmelerine ("Önbellek İzdihamlarına") neden olur. `rwlocker`, saf `O(1)` kuyruklama mimarisi ile bunu tamamen ortadan kaldırır.
+
+**Senkron (Thread) RWCondition Performansı:**
+100 uyuyan okuyucu aynı anda uyandırıldığında, `rwlocker` işletim sistemini kilitlemeden onları anında işler. Bu mimari sıçrama, standart kütüphanedeki `threading.Condition`'a kıyasla **~45 kata kadar akıl almaz bir hızlanma** ile sonuçlanır.
+<p align="center">
+  <img src="./figures/sync_rwcondition.svg" alt="Sync RWCondition Benchmark" width="100%"/>
+</p>
+<br>
+
+**Asenkron (Asyncio) RWCondition Performansı:**
+Olay güdümlü (event-driven) önbellek sistemlerinde, bekleyen yüzlerce web isteğini aynı anda uyandırmak büyük bir darboğazdır. `AsyncRWCondition`, standart asyncio kısıtlamalarını tamamen atlayarak devasa uyanma senaryolarında **~45 kat daha yüksek işlem hacmine** ulaşır ve event-loop'un donmasını kesin olarak engeller.
+<p align="center">
+  <img src="./figures/async_rwcondition.svg" alt="Async RWCondition Benchmark" width="100%"/>
+</p>
+<br>
+
+*(Not: Tüm kilit, adaptör ve condition sınıfları; reentrancy, deadlock, timeout, OS kesintileri, O(N) kaçakları ve cancellation safety senaryolarını kapsayan devasa **315 farklı birim testinden (unit tests)** 0 hata ile geçmiş ve tüm bu test paketi yalnızca **13.2 saniyede** tamamlanmıştır.)*
 
 <br/>
 
-## 🚀 Başlayalım
+## 🚀 Başlangıç
 
 ### 🛠️ Bağımlılıklar
 
@@ -128,7 +148,7 @@ Kütüphanenin dış hiçbir bağımlılığı yoktur, doğrudan Python'un çeki
     git clone https://github.com/TahsinCr/python-rwlocker.git
     ```
 
-2. PIP paketlerini kurun
+2. PIP aracılığıyla kurun
     ```sh
     pip install rwlocker
     ```
@@ -137,7 +157,7 @@ Kütüphanenin dış hiçbir bağımlılığı yoktur, doğrudan Python'un çeki
 
 ### 💻 Kullanım Örnekleri
 
-#### 1. Yüksek Eşzamanlı Önbellek (Read-Heavy Cache)
+#### 1. Yüksek Eşzamanlı Bellek İçi Önbellek (Read-Heavy)
 
 Binlerce request alan bir web sunucusunda, okuyucuların birbirini beklemesini engeller.
 
@@ -173,7 +193,7 @@ for t in threads: t.start()
 
 ```
 
-#### 2. Finansal İşlemlerde Atomik Durum Düşürme (Downgrade)
+#### 2. Finansal Kayıtlarda Atomik Derece Düşürme (Downgrading)
 
 Veriyi güncelledikten (Write) hemen sonra, araya başka bir yazar (başka bir işlem) sızmadan aynı veriyi okuyup denetlemek (Read) için mükemmeldir.
 
@@ -242,7 +262,7 @@ class AuthTokenManager:
 
 ```
 
-#### 4. Yüksek Frekanslı Telemetri (Adil Fair Dağıtımı)
+#### 4. Yüksek Frekanslı Telemetri (Adil Dağıtım)
 
 Sensörden saniyede 100 kere veri geliyor (Yazma), ve 200 adet WebSocket bu veriyi okuyor (Okuma). Fair mimarisi iki tarafın da kilitlenmesini engeller.
 
@@ -377,7 +397,7 @@ simple_adapter_lock = Lock()
 third_party_worker(simple_adapter_lock, [])
 ```
 
-_Daha fazla örnek için lütfen [örnekler][examples-url] klasörüne bakın_
+*Daha fazla örnek için lütfen [examples][examples-url] klasörüne göz atın.*
 
 Önerilen özelliklerin (ve bilinen sorunların) tam listesi için [açık sorunlara][issues-url] bakın.
 
@@ -420,7 +440,7 @@ Projeyi faydalı bulduysanız sağ üstten bir **Yıldız (⭐)** vermeyi unutma
 
 5. Bu repoya gelerek bir **Pull Request (Çekme İsteği)** açın.
 
-> ⚠️ **Önemli Geliştirici Notu:** `rwlocker` mimarisi *deadlock*, *OS-Interrupts (İşletim Sistemi Kesintileri)* ve *reentrancy* senaryolarına karşı son derece hassastır. Lütfen PR açmadan önce projedeki **266+ birim testinin (unit tests) tamamının firesiz geçtiğinden** ve kodunuzun **Python 3.9+** standartlarıyla uyumlu olduğundan emin olun.
+> ⚠️ **Önemli Geliştirici Notu:** `rwlocker` mimarisi *deadlock*, *OS-Interrupts (İşletim Sistemi Kesintileri)* ve *reentrancy* senaryolarına karşı son derece hassastır. Lütfen PR açmadan önce projedeki **315+ birim testinin (unit tests) tamamının firesiz geçtiğinden** ve kodunuzun **Python 3.9+** standartlarıyla uyumlu olduğundan emin olun.
 
 
 <br/>
@@ -477,7 +497,7 @@ Email: TahsinCrs@gmail.com
 
 [issues-url]: https://github.com/TahsinCr/python-rwlocker/issues
 
-[examples-url]: https://github.com/TahsinCr/python-rwlocker/wiki
+[examples-url]: https://github.com/TahsinCr/python-rwlocker/tree/main/examples
 
 [license-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/LICENSE
 
@@ -498,3 +518,5 @@ Email: TahsinCrs@gmail.com
 [lang-tr-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_tr.md
 
 [lang-en-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README.md
+
+[lang-ru-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_ru.md

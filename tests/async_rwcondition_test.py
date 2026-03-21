@@ -106,6 +106,26 @@ class BaseAsyncConditionTests:
         await asyncio.gather(*tasks)
         self.assertEqual(wait_count, 4)
 
+    async def test_massive_notify_all_cache_stampede_resilience(self):
+        wait_count = 0
+        event_happened = False
+
+        async def waiter_task():
+            nonlocal wait_count
+            async with self.condition.read:
+                await self.condition.read.wait_for(lambda: event_happened)
+                wait_count += 1
+
+        tasks = [asyncio.create_task(waiter_task()) for _ in range(100)]
+        await asyncio.sleep(0.2)
+
+        async with self.condition.write:
+            event_happened = True
+            self.condition.write.notify_all()
+
+        await asyncio.gather(*tasks)
+        self.assertEqual(wait_count, 100, "All 100 tasks must wake up correctly during a massive broadcast.")
+
     async def test_wait_cancellation_safety(self):
         """
         Verify that cancelling a waiting task does not corrupt the lock state

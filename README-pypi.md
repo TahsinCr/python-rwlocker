@@ -83,29 +83,33 @@ If you use the lock objects directly like a standard lock without specifying the
 
 ## 📊 Performance and Benchmark Results
 
-`rwlocker` unlocks the system's true potential during Network and Database I/O operations where Python's GIL (Global Interpreter Lock) is released. In aggressive scenario tests conducted with zero OS sleep interference, it overwhelmingly outperformed standard locks.
+The performance results demonstrate `rwlocker`'s true potential during Network and Database I/O operations where Python's GIL (Global Interpreter Lock) is released or context-switched. 
 
-**Summary of Performance Outputs:**
+**🖥️ Test Environment:** All tests were executed on an **Intel Core i7-12700H (2.4GHz)** processor running **EndeavourOS (Arch-based Linux)**, using **Python 3.14.3** and the experimental **Free-Threading (3.14.3t)** interpreters.
 
-* **🚀 Read-Heavy Scenario (100 Readers, 2 Writers):**
-While standard locks queue readers single-file and choke the system, `rwlocker` allows readers to access the data simultaneously. This achieves **~37x FASTER** speed and throughput in **Threading** and **~30x FASTER** in **Asyncio**.
-* **⚖️ Balanced Scenario (50 Readers, 50 Writers):**
-Thanks to the Fair state machine, read operations are squeezed in parallel between write queues. It increases performance by **2x** compared to standard locks without creating a system bottleneck.
-* **🛡️ Write-Heavy Scenario (2 Readers, 100 Writers):**
-Even though write operations inherently cannot be executed concurrently (in parallel), thanks to `rwlocker`'s zero-allocation smart proxy architecture, it runs **7-8% faster** than standard `C`-based locks. Even the O(1) cost "ReentrantWriter" (reentrancy) feature adds almost no overhead to performance.
+**🧪 Methodology:** To ensure absolute precision and zero margin of error, all reader and writer entities (threads or async tasks) are spawned in advance and held at a starting line using a synchronization `Event`. Once the event triggers, they execute simultaneously. The workloads strictly follow an `IOBoundScenario` that enforces a precise `time.sleep(0.001)` or `asyncio.sleep(0.001)` delay to accurately simulate real network/database I/O latency.
 
-**Condition Variable Performance Outputs:**
+### 1. Read-Write Lock (RWLock) Benchmarks
 
-Standard library Condition structures lock up the CPU during multiple wake-ups due to O(N) scanning. `rwlocker`'s O(1) queue architecture absolutely crushes the standard library at this point.
+Standard locks force threads to queue single-file even if they are only reading data. `rwlocker` unleashes concurrent read access.
 
-* **📣 Massive Broadcast (1 Writer, 100 Readers):**
-When a single writer updates the database and wakes up hundreds of waiting readers (`notify_all`); thanks to our O(1) architecture, **~65x FASTER** throughput (Ops/sec) is achieved in **Threading**, and **~70x FASTER** in **Asyncio**. The system is saved from entering a "Cache Stampede".
-* **🔀 Balanced Pub/Sub (50 Writers, 50 Readers):**
-In mixed waiting and waking scenarios, our Condition locks with the `Write-Pref` strategy ran **~2x FASTER** than the standard library.
-* **📉 Write-Heavy Limit (Stress Test - 100 Writers, 2 Readers):**
-In this brutal scenario where writers constantly block each other and call `notify()`, C-based standard locks utilize their raw speed advantage. `rwlocker`'s Write-Pref model holds its ground neck-and-neck (1.0x) with the standard lock, while the Fair and Read-Pref models intentionally slow down (0.5x - 0.7x) for the sake of maintaining fairness.
+**Synchronous (Thread) RWLock Performance:**
+In the Read-Heavy scenario, standard C-based locks choke the system, whereas `rwlocker` achieves up to **~35x speedup**. Even in Write-Heavy workloads where parallelism isn't inherently possible, `rwlocker` matches or slightly outperforms the C-baseline thanks to its zero-allocation fast-paths.
 
-*(Note: All lock, adapter, and condition classes have passed a massive suite of **266 different unit tests** covering reentrancy, deadlock, timeout, OS interrupts, O(N) leaks, and cancellation safety scenarios with 0 errors, and this entire test suite was completed in just **8.5 seconds**.)*
+**Asynchronous (Asyncio) RWLock Performance:**
+`rwlocker` achieves **~30x faster throughput** by allowing thousands of reader tasks to await I/O simultaneously without blocking one another.
+
+### 2. Condition Variable (RWCondition) Benchmarks
+
+Standard `Condition` variables iterate through all sleeping threads/tasks one by one `O(N)` during a broadcast (`notify_all`), causing massive CPU spikes and "Cache Stampedes". `rwlocker` completely eradicates this with its pure `O(1)` queueing architecture.
+
+**Synchronous (Thread) RWCondition Performance:**
+When 100 sleeping readers are awakened simultaneously, `rwlocker` processes them instantly without locking the OS. This architectural leap results in a mind-blowing **~45x speedup** compared to the standard library's `threading.Condition`.
+
+**Asynchronous (Asyncio) RWCondition Performance:**
+In event-driven caching systems, waking up hundreds of waiting web requests simultaneously is a major bottleneck. The `AsyncRWCondition` completely bypasses standard asyncio constraints, reaching up to **~45x higher throughput** during massive broadcast scenarios, completely saving the loop from freezing.
+
+*(Note: All lock, adapter, and condition classes have passed a massive suite of **315 different unit tests** covering reentrancy, deadlock, timeout, OS interrupts, O(N) leaks, and cancellation safety scenarios with 0 errors, and this entire test suite was completed in just **13.2 seconds**.)*
 
 
 <br/>
@@ -440,7 +444,7 @@ Email: TahsinCrs@gmail.com
 
 [issues-url]: https://github.com/TahsinCr/python-rwlocker/issues
 
-[examples-url]: https://github.com/TahsinCr/python-rwlocker/wiki
+[examples-url]: https://github.com/TahsinCr/python-rwlocker/tree/main/examples
 
 [license-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/LICENSE
 
@@ -458,6 +462,8 @@ Email: TahsinCrs@gmail.com
 
 <!-- File URL -->
 
-[lang-tr-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_TR.md
+[lang-tr-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_tr.md
 
 [lang-en-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README.md
+
+[lang-ru-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_ru.md
