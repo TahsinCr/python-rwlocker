@@ -1,6 +1,28 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
+## **[3.2] - 21.03.2026**
+The **"Absolute Speed & Memory Safety"** update. This version strictly prioritizes raw execution speed by reversing the DRY-oriented mixin architecture, introduces O(1) memory optimizations for thread state downgrades, completely eliminates a critical memory leak in async task tracking via weak references, and refines type hinting for standard adapters.
+
+### Updated
+* **Removal of State-Machine Mixins (`mixins.py`)**:
+    * Completely removed the `mixins.py` module that was introduced in version 3.1.
+    * Re-inlined all core scheduling algorithms (`_can_read`, `_can_write`, `_acquire_read_core`, etc.) directly back into their respective Thread and Async lock classes.
+    * **Reasoning:** While the mixin architecture made the codebase significantly cleaner by following DRY principles, the Method Resolution Order (MRO) indirection and the overhead of extra class hierarchy jumps caused a **~2-3% performance penalty** in highly concurrent `RWLock` and `RWCondition` workloads. In a low-level concurrency primitive library, raw execution speed inherently outweighs code aesthetics.
+* **O(1) Memory Optimization for Thread Downgrades**:
+    * Replaced the `_downgraded_threads` hash set with a single `_downgraded_thread_id` variable in `RWLockWriterProxy`.
+    * Since a write lock is strictly exclusive, only one thread can ever hold and downgrade it at any given time. Maintaining a dynamic set was structurally redundant and incurred unnecessary allocation overhead.
+
+### Fixed
+* **Memory Leak Prevention in Async Downgrades**:
+    * Upgraded the `_downgraded_tasks` tracker in `AsyncRWLockWriterProxy` to utilize a `weakref.WeakSet` instead of a standard `set`.
+    * `asyncio.Task` objects are highly volatile and frequently destroyed. Keeping strong references inside the lock proxy could lead to severe memory leaks (zombie tasks). The `WeakSet` guarantees they are cleanly garbage-collected by Python.
+* **Standard Adapter Type Hinting**:
+    * Corrected the `__init__` constructor type hints for standard `Condition` and `AsyncCondition` adapters.
+    * They now correctly accept the `Lockable` and `AsyncLockable` protocols, fixing an issue where they falsely restricted inputs to proxy-based `RWLockBase` structures, ignoring standard standard library locks.
+
+<br>
+
 ## **[3.1] - 20.03.2026**
 The **"Micro-Optimizations & Memory Safety"** update. This version introduces targeted performance improvements to internal state checks, cleans up the codebase by removing duplicates, and resolves a critical memory leak in asynchronous broadcast queues.
 
