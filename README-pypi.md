@@ -457,13 +457,3 @@ Email: TahsinCrs@gmail.com
 [linkedin-url]: https://linkedin.com/in/TahsinCr
 
 [x-url]: https://twitter.com/TahsinCrs
-
-
-
-<!-- File URL -->
-
-[lang-tr-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_tr.md
-
-[lang-en-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README.md
-
-[lang-ru-url]: https://github.com/TahsinCr/python-rwlocker/blob/main/README_ru.md
