@@ -11,8 +11,8 @@ from benchmarks import (
 )
 
 locks = [
-    thread_rwlock_benchmark.StandardLockWrapper,
     thread_rwlock_benchmark.StandardRLockWrapper,
+    thread_rwlock_benchmark.StandardLockWrapper,
     rwlocker.RWLockWrite, rwlocker.RWLockWriteReentrantWriter,
     rwlocker.RWLockRead, rwlocker.RWLockReadReentrantWriter,
     rwlocker.RWLockFair, rwlocker.RWLockFairReentrantWriter

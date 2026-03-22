@@ -1,7 +1,7 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
-## **[3.2] - 21.03.2026**
+## **[3.2] - 22.03.2026**
 The **"Absolute Speed & Memory Safety"** update. This version strictly prioritizes raw execution speed by reversing the DRY-oriented mixin architecture, introduces O(1) memory optimizations for thread state downgrades, completely eliminates a critical memory leak in async task tracking via weak references, and refines type hinting for standard adapters.
 
 ### Updated
@@ -23,7 +23,7 @@ The **"Absolute Speed & Memory Safety"** update. This version strictly prioritiz
 
 <br>
 
-## **[3.1] - 20.03.2026**
+## **[3.1] - 21.03.2026**
 The **"Micro-Optimizations & Memory Safety"** update. This version introduces targeted performance improvements to internal state checks, cleans up the codebase by removing duplicates, and resolves a critical memory leak in asynchronous broadcast queues.
 
 ### Added

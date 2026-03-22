@@ -136,7 +136,7 @@ Olay güdümlü (event-driven) önbellek sistemlerinde, bekleyen yüzlerce web i
 ### 🛠️ Bağımlılıklar
 
 * Dış bağımlılık bulunmamaktadır.
-* Sadece Python Standart Kütüphanesi (`threading`, `asyncio`, `typing`, `collections`).
+* Sadece Python Standart Kütüphanesi (`threading`, `asyncio`, `typing`, `collections`, `weakref`).
 * Python 3.9+ ile tam uyumlu.
 
 ### 📦 Kurulum

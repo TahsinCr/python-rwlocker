@@ -136,7 +136,7 @@
 ### 🛠️ Зависимости
 
 * Нет внешних зависимостей.
-* Только стандартная библиотека Python (`threading`, `asyncio`, `typing`, `collections`).
+* Только стандартная библиотека Python (`threading`, `asyncio`, `typing`, `collections`, `weakref`).
 * Полностью совместим с Python 3.9+.
 
 ### 📦 Установка

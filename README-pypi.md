@@ -119,7 +119,7 @@ In event-driven caching systems, waking up hundreds of waiting web requests simu
 ### 🛠️ Dependencies
 
 * No external dependencies.
-* Only Python Standard Library (`threading`, `asyncio`, `typing`, `collections`).
+* Only Python Standard Library (`threading`, `asyncio`, `typing`, `collections`, `weakref`).
 * Fully compatible with Python 3.9+.
 
 ### 📦 Installation
