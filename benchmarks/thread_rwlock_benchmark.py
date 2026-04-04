@@ -1,12 +1,15 @@
 import threading
+import queue
 
-from benchmarks.benchmark_base import BenchmarkerBase, BenchmarkDataHandler
+from benchmarks.benchmark_base import BenchmarkerBase, BenchmarkConfig, BenchmarkDataHandler
 from benchmarks.benchmark_scenario import (
     BaseScenario, IOBoundScenario, CPUBoundScenario
 )
+import time
 from rwlocker.thread_rwlock import (
     RWLockBase, RWLockWrite, RWLockWriteReentrantWriter,
     RWLockRead, RWLockReadReentrantWriter,
+    RWLockReaderPhaseFair, RWLockReaderPhaseFairReentrantWriter,
     RWLockFair, RWLockFairReentrantWriter
 )
 
@@ -33,18 +36,22 @@ class ThreadLockBenchmarker(BenchmarkerBase):
         lock:RWLockBase, 
         scenario:BaseScenario, 
         is_reader:bool, 
-        iterations:int, 
-        start_event:threading.Event
+        start_barrier:threading.Barrier,
+        worker_id:int,
+        errors:queue.SimpleQueue,
     ):
-        start_event.wait() 
-        if is_reader:
-            for _ in range(iterations):
-                with lock.read:
-                    scenario.execute_read()
-        else:
-            for _ in range(iterations):
-                with lock.write:
-                    scenario.execute_write()
+        try:
+            start_barrier.wait()
+            if is_reader:
+                for _ in range(scenario.iterations):
+                    with lock.read:
+                        scenario.execute_read(worker_id)
+            else:
+                for _ in range(scenario.iterations):
+                    with lock.write:
+                        scenario.execute_write(worker_id)
+        except BaseException as exc:
+            errors.put(exc)
 
     def _create_workers(
         self, 
@@ -52,53 +59,99 @@ class ThreadLockBenchmarker(BenchmarkerBase):
         scenario:BaseScenario, 
         num_readers:int, 
         num_writers:int, 
-        iterations:int, 
-        start_event:threading.Event
+        start_barrier:threading.Barrier,
+        errors:queue.SimpleQueue,
     ):
         threads = []
+        worker_id = 0
         for _ in range(num_readers):
             threads.append(threading.Thread(
                 target=self._worker, 
-                args=(target_obj, scenario, True, iterations, start_event)
+                args=(target_obj, scenario, True, start_barrier, worker_id, errors)
             ))
+            worker_id += 1
         for _ in range(num_writers):
             threads.append(threading.Thread(
                 target=self._worker, 
-                args=(target_obj, scenario, False, iterations, start_event)
+                args=(target_obj, scenario, False, start_barrier, worker_id, errors)
             ))
+            worker_id += 1
         return threads
 
+    def _run_target_trial(
+        self,
+        target_class:type,
+        scenario:BaseScenario,
+        num_readers:int,
+        num_writers:int,
+        config:BenchmarkConfig,
+    ) -> float:
+        del config
+        total_workers = num_readers + num_writers
+        if total_workers == 0:
+            return 0.0001
+        target_obj = target_class()
+        timer = {"start": 0.0}
+        errors:queue.SimpleQueue = queue.SimpleQueue()
 
-def benchmark(scenarios:list[BaseScenario], locks:list[RWLockBase], data_handler:BenchmarkDataHandler=None):
-    engine = ThreadLockBenchmarker(locks, data_handler=data_handler)
-    
-    if not data_handler:
-        print("=" * 60)
-        print("REAL-WORLD I/O CONCURRENCY BENCHMARK")
-        print("=" * 60)
+        def mark_start() -> None:
+            timer["start"] = time.perf_counter()
+
+        start_barrier = threading.Barrier(total_workers + 1, action=mark_start)
+        threads = self._create_workers(target_obj, scenario, num_readers, num_writers, start_barrier, errors)
+
+        for thread in threads:
+            thread.start()
+
+        try:
+            start_barrier.wait()
+            for thread in threads:
+                thread.join()
+        finally:
+            for thread in threads:
+                if thread.is_alive():
+                    thread.join()
+
+        if not errors.empty():
+            raise RuntimeError(f"{target_class.__name__} worker failed") from errors.get()
+
+        return max(time.perf_counter() - timer["start"], 0.0001)
+
+
+def benchmark(
+    scenarios:list[BaseScenario],
+    locks:list[RWLockBase],
+    data_handler:BenchmarkDataHandler=None,
+    config:BenchmarkConfig | None = None,
+):
+    engine = ThreadLockBenchmarker(locks, data_handler=data_handler, config=config)
     
     for scenario in scenarios:
+        if not data_handler:
+            print("=" * 60)
+            print(f"Senario: {scenario.get_name()}")
+            print("=" * 60)
+        
         engine.run_workload(
-            "Read-Heavy (2 Writer, 100 Readers)",
-            scenario, num_readers=100, num_writers=2, iterations=10
+            "Read-Heavy",
+            scenario, num_readers=100, num_writers=2
         )
 
         engine.run_workload(
-            "Balanced (50 Writers, 50 Readers)", 
-            scenario, num_readers=50, num_writers=50, iterations=10
+            "Balance", 
+            scenario, num_readers=50, num_writers=50
         )
 
         engine.run_workload(
-            "Write-Heavy (100 Writers, 2 Readers)", 
-            scenario, num_readers=2, num_writers=100, iterations=10
+            "Write-Heavy", 
+            scenario, num_readers=2, num_writers=100
         )
 
 
 if __name__ == '__main__':
     benchmark(
         scenarios=[
-            IOBoundScenario(),
-            CPUBoundScenario()
+            IOBoundScenario()
         ],
         locks=[
             StandardLockWrapper,
@@ -107,6 +160,8 @@ if __name__ == '__main__':
             RWLockWriteReentrantWriter,
             RWLockRead,
             RWLockReadReentrantWriter,
+            RWLockReaderPhaseFair,
+            RWLockReaderPhaseFairReentrantWriter,
             RWLockFair,
             RWLockFairReentrantWriter
         ]

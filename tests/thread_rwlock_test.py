@@ -2,10 +2,13 @@ import unittest
 import threading
 import time
 from typing import Type
+from unittest.mock import patch
 
+import rwlocker.thread_rwlock as thread_rwlock_mod
 from rwlocker.thread_rwlock import (
     RWLockWrite, RWLockWriteReentrantWriter,
     RWLockRead, RWLockReadReentrantWriter,
+    RWLockReaderPhaseFair, RWLockReaderPhaseFairReentrantWriter,
     RWLockFair, RWLockFairReentrantWriter,
     RWLockBase, Lock
 )
@@ -146,6 +149,14 @@ class RWLockTests(BaseLockTests):
         self.lock.read.release()
         t.join()
 
+    def test_manual_read_release_after_downgrade_does_not_poison_next_write_release(self):
+        self.assertTrue(self.lock.write.acquire())
+        self.lock.write.downgrade()
+        self.lock.read.release()
+        self.assertTrue(self.lock.write.acquire())
+        self.lock.write.release()
+        self.assertFalse(self.lock.write.locked())
+
     def test_timeout_removes_waiter_from_queue(self):
         self.lock.write.acquire()
         t = threading.Thread(target=lambda: self.lock.read.acquire(timeout=0.05))
@@ -238,6 +249,182 @@ class ReentrantWriterTestsMixin:
         self.lock.write.release()
 
 
+class FairPhaseTestsMixin:
+    def _start_waiting_reader(self, entered_event: threading.Event, release_event: threading.Event):
+        def reader():
+            with self.lock.read:
+                entered_event.set()
+                release_event.wait(1.0)
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        return thread
+
+    def _start_waiting_writer(self, entered_event: threading.Event):
+        def writer():
+            with self.lock.write:
+                entered_event.set()
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        return thread
+
+    def test_reader_phase_drains_waiting_readers_before_writer(self):
+        self.lock.write.acquire()
+        release_readers = threading.Event()
+        first_reader_entered = threading.Event()
+        second_reader_entered = threading.Event()
+        writer_entered = threading.Event()
+
+        readers = [
+            self._start_waiting_reader(first_reader_entered, release_readers),
+            self._start_waiting_reader(second_reader_entered, release_readers),
+        ]
+        writer = self._start_waiting_writer(writer_entered)
+
+        time.sleep(0.05)
+        self.lock.write.release()
+
+        self.assertTrue(first_reader_entered.wait(1.0), "First waiting reader should enter the fair reader phase.")
+        self.assertTrue(second_reader_entered.wait(1.0), "Second waiting reader should drain before the waiting writer.")
+        self.assertFalse(writer_entered.is_set(), "Writer must not cut in before the queued reader phase is drained.")
+
+        release_readers.set()
+        for reader in readers:
+            reader.join()
+        writer.join(timeout=1.0)
+        self.assertFalse(writer.is_alive(), "Writer should enter after the reader phase completes.")
+        self.assertTrue(writer_entered.is_set())
+
+    def test_downgrade_starts_reader_phase_before_writer(self):
+        self.lock.write.acquire()
+        release_readers = threading.Event()
+        first_reader_entered = threading.Event()
+        second_reader_entered = threading.Event()
+        writer_entered = threading.Event()
+
+        readers = [
+            self._start_waiting_reader(first_reader_entered, release_readers),
+            self._start_waiting_reader(second_reader_entered, release_readers),
+        ]
+        writer = self._start_waiting_writer(writer_entered)
+
+        time.sleep(0.05)
+        self.lock.write.downgrade()
+
+        self.assertTrue(first_reader_entered.wait(1.0), "Downgrade should let queued readers join the new reader phase.")
+        self.assertTrue(second_reader_entered.wait(1.0), "Queued readers should continue draining after downgrade.")
+        self.assertFalse(writer_entered.is_set(), "Writer must wait until the downgraded reader phase finishes.")
+
+        release_readers.set()
+        self.lock.write.release()
+        for reader in readers:
+            reader.join()
+        writer.join(timeout=1.0)
+        self.assertFalse(writer.is_alive(), "Writer should proceed once downgraded readers are done.")
+        self.assertTrue(writer_entered.is_set())
+
+    def test_reader_phase_can_use_reader_notify_all(self):
+        self.lock.write.acquire()
+        release_readers = threading.Event()
+        reader_entered = threading.Event()
+        writer_entered = threading.Event()
+        reader_notify_all_calls = 0
+        original_notify_all = thread_rwlock_mod.ThreadWaitQueue.notify_all
+
+        def counting_notify_all(queue_self):
+            nonlocal reader_notify_all_calls
+            if queue_self is self.lock.read.condition:
+                reader_notify_all_calls += 1
+            return original_notify_all(queue_self)
+
+        with patch.object(thread_rwlock_mod.ThreadWaitQueue, 'notify_all', new=counting_notify_all):
+            reader = self._start_waiting_reader(reader_entered, release_readers)
+            writer = self._start_waiting_writer(writer_entered)
+            time.sleep(0.05)
+            self.lock.write.release()
+
+            self.assertTrue(reader_entered.wait(1.0))
+            self.assertFalse(writer_entered.is_set())
+
+            release_readers.set()
+            reader.join()
+            writer.join(timeout=1.0)
+
+        if isinstance(self.lock, (RWLockFair, RWLockFairReentrantWriter)):
+            self.assertEqual(
+                reader_notify_all_calls,
+                0,
+                "Strict fair should still avoid reader notify_all broadcasts."
+            )
+        else:
+            self.assertGreater(
+                reader_notify_all_calls,
+                0,
+                "Reader-phase fair should now use aggressive reader wakeups."
+            )
+        self.assertFalse(writer.is_alive())
+
+    def test_late_reader_barging_behavior(self):
+        self.lock.write.acquire()
+        release_first_reader = threading.Event()
+        first_reader_entered = threading.Event()
+        late_reader_entered = threading.Event()
+        writer_entered = threading.Event()
+        order: list[str] = []
+
+        def first_reader():
+            with self.lock.read:
+                order.append('first_reader')
+                first_reader_entered.set()
+                release_first_reader.wait(1.0)
+
+        def late_reader():
+            with self.lock.read:
+                order.append('late_reader')
+                late_reader_entered.set()
+
+        def writer():
+            with self.lock.write:
+                order.append('writer')
+                writer_entered.set()
+
+        first_reader_thread = threading.Thread(target=first_reader)
+        writer_thread = threading.Thread(target=writer)
+        first_reader_thread.start()
+        writer_thread.start()
+
+        time.sleep(0.05)
+        self.lock.write.release()
+
+        self.assertTrue(first_reader_entered.wait(1.0))
+        late_reader_thread = threading.Thread(target=late_reader)
+        late_reader_thread.start()
+
+        if self.expect_late_reader_barging:
+            self.assertTrue(late_reader_entered.wait(1.0), "Reader-phase fair locks should allow late readers to join an open reader phase.")
+            self.assertFalse(writer_entered.is_set(), "Queued writer should still wait while the open reader phase continues.")
+        else:
+            time.sleep(0.1)
+            self.assertFalse(late_reader_entered.is_set(), "Strict fair locks must block readers that arrive after the reader phase has started.")
+            self.assertFalse(writer_entered.is_set(), "Writer should still be waiting while the reserved reader is active.")
+
+        release_first_reader.set()
+        first_reader_thread.join()
+        writer_thread.join(timeout=1.0)
+        late_reader_thread.join(timeout=1.0)
+
+        self.assertFalse(writer_thread.is_alive())
+        self.assertFalse(late_reader_thread.is_alive())
+        self.assertEqual(order[0], 'first_reader')
+        if self.expect_late_reader_barging:
+            self.assertEqual(order[1], 'late_reader')
+            self.assertEqual(order[2], 'writer')
+        else:
+            self.assertEqual(order[1], 'writer')
+            self.assertEqual(order[2], 'late_reader')
+
+
 class TestRWLockWrite(RWLockTests, unittest.TestCase):
     lock_class = RWLockWrite
 
@@ -250,11 +437,21 @@ class TestRWLockRead(RWLockTests, unittest.TestCase):
 class TestRWLockReadReentrantWriter(ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
     lock_class = RWLockReadReentrantWriter
 
-class TestRWLockFair(RWLockTests, unittest.TestCase):
-    lock_class = RWLockFair
+class TestRWLockReaderPhaseFair(FairPhaseTestsMixin, RWLockTests, unittest.TestCase):
+    lock_class = RWLockReaderPhaseFair
+    expect_late_reader_barging = True
 
-class TestRWLockFairReentrantWriter(ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
+class TestRWLockReaderPhaseFairReentrantWriter(FairPhaseTestsMixin, ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
+    lock_class = RWLockReaderPhaseFairReentrantWriter
+    expect_late_reader_barging = True
+
+class TestRWLockFair(FairPhaseTestsMixin, RWLockTests, unittest.TestCase):
+    lock_class = RWLockFair
+    expect_late_reader_barging = False
+
+class TestRWLockFairReentrantWriter(FairPhaseTestsMixin, ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
     lock_class = RWLockFairReentrantWriter
+    expect_late_reader_barging = False
 
 class TestLock(BaseLockTests, unittest.TestCase):
     lock_class = Lock
@@ -262,6 +459,7 @@ class TestLock(BaseLockTests, unittest.TestCase):
 class TestRLock(BaseLockTests, unittest.TestCase):
     lock_class = Lock
     lock_inner = threading.RLock
+
 
 if __name__ == '__main__':
     unittest.main()

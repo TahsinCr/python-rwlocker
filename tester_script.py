@@ -3,7 +3,8 @@ from tests import (
     thread_rwlock_test, 
     async_rwlock_test, 
     thread_rwcondition_test,
-    async_rwcondition_test
+    async_rwcondition_test,
+    benchmark_base_test
 )
 
 def run_all_tests():
@@ -12,6 +13,7 @@ def run_all_tests():
     suite.addTests(loader.loadTestsFromModule(async_rwlock_test))
     suite.addTests(loader.loadTestsFromModule(thread_rwcondition_test))
     suite.addTests(loader.loadTestsFromModule(async_rwcondition_test))
+    suite.addTests(loader.loadTestsFromModule(benchmark_base_test))
 
     runner = unittest.TextTestRunner(verbosity=2)
     

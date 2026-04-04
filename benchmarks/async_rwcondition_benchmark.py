@@ -1,11 +1,12 @@
 import asyncio
+import time
 
-from benchmarks.benchmark_base import AsyncBenchmarkerBase, BenchmarkDataHandler
+from benchmarks.benchmark_base import AsyncBenchmarkerBase, BenchmarkConfig, BenchmarkDataHandler
 from benchmarks.benchmark_scenario import (
     BaseScenario, AsyncIOBoundScenario
 )
 from rwlocker.async_rwlock import (
-    AsyncRWLockWrite, AsyncRWLockRead, AsyncRWLockFair,
+    AsyncRWLockWrite, AsyncRWLockRead, AsyncRWLockReaderPhaseFair, AsyncRWLockFair,
     AsyncRWConditionBase, AsyncRWCondition
 )
 
@@ -37,6 +38,14 @@ class AsyncRWConditionReadWrapper:
     @classmethod
     def get_name(cls): return "AsyncRWCondition (Read-Pref)"
 
+class AsyncRWConditionReaderPhaseFairWrapper:
+    def __init__(self):
+        self._cond = AsyncRWCondition(AsyncRWLockReaderPhaseFair())
+        self.read = self._cond.read
+        self.write = self._cond.write
+    @classmethod
+    def get_name(cls): return "AsyncRWCondition (ReaderPhaseFair)"
+
 class AsyncRWConditionFairWrapper:
     def __init__(self):
         self._cond = AsyncRWCondition(AsyncRWLockFair())
@@ -52,29 +61,29 @@ class AsyncConditionBenchmarker(AsyncBenchmarkerBase):
         cond:AsyncRWConditionBase, 
         scenario:BaseScenario,
         num_writers:int,
-        iterations:int, 
-        start_event:asyncio.Event
+        start_event:asyncio.Event,
+        worker_id:int,
     ):
         await start_event.wait()
-        target_epoch = iterations * num_writers
+        target_epoch = scenario.iterations * num_writers
         expected = 1
         while expected <= target_epoch:
             async with cond.read:
                 await cond.read.wait_for(lambda: scenario.epoch >= expected)
                 expected = scenario.epoch + 1 
-                await scenario.execute_read()
+                await scenario.execute_read(worker_id)
 
     async def _writer_worker(
         self, 
         cond:AsyncRWConditionBase, 
         scenario:BaseScenario, 
-        iterations:int, 
-        start_event:asyncio.Event
+        start_event:asyncio.Event,
+        worker_id:int,
     ):
         await start_event.wait()
-        for _ in range(iterations):
+        for _ in range(scenario.iterations):
             async with cond.write:
-                await scenario.execute_write()
+                await scenario.execute_write(worker_id)
                 scenario.epoch += 1
                 cond.write.notify_all()
 
@@ -84,43 +93,73 @@ class AsyncConditionBenchmarker(AsyncBenchmarkerBase):
         scenario:BaseScenario, 
         num_readers:int, 
         num_writers:int, 
-        iterations:int, 
-        start_event:asyncio.Event
+        start_event:asyncio.Event,
     ):
         tasks = []
+        worker_id = 0
         for _ in range(num_readers):
             tasks.append(asyncio.create_task(
-                self._reader_worker(target_obj, scenario, num_writers, iterations, start_event)
+                self._reader_worker(target_obj, scenario, num_writers, start_event, worker_id)
             ))
+            worker_id += 1
         for _ in range(num_writers):
             tasks.append(asyncio.create_task(
-                self._writer_worker(target_obj, scenario, iterations, start_event)
+                self._writer_worker(target_obj, scenario, start_event, worker_id)
             ))
+            worker_id += 1
         return tasks
 
+    async def _run_target_trial(
+        self,
+        target_class:type,
+        scenario:BaseScenario,
+        num_readers:int,
+        num_writers:int,
+        config:BenchmarkConfig,
+    ) -> float:
+        del config
+        total_workers = num_readers + num_writers
+        if total_workers == 0:
+            return 0.0001
 
-async def benchmark(scenarios:list[BaseScenario], conditions:list[AsyncRWConditionBase], data_handler:BenchmarkDataHandler=None):
-    engine = AsyncConditionBenchmarker(conditions, data_handler=data_handler)
-    
-    if not data_handler:
-        print("=" * 60)
-        print("REAL-WORLD ASYNC CONDITION VARIABLE CONCURRENCY BENCHMARK")
-        print("=" * 60)
+        target_obj = target_class()
+        start_event = asyncio.Event()
+        tasks = self._create_workers(target_obj, scenario, num_readers, num_writers, start_event)
+
+        await asyncio.sleep(0)
+        start_time = time.perf_counter()
+        start_event.set()
+        await asyncio.gather(*tasks)
+        return max(time.perf_counter() - start_time, 0.0001)
+
+
+async def benchmark(
+    scenarios:list[BaseScenario],
+    conditions:list[AsyncRWConditionBase],
+    data_handler:BenchmarkDataHandler=None,
+    config:BenchmarkConfig | None = None,
+):
+    engine = AsyncConditionBenchmarker(conditions, data_handler=data_handler, config=config)
     
     for scenario in scenarios:
+        if not data_handler:
+            print("=" * 60)
+            print(f"Senario: {scenario.get_name()}")
+            print("=" * 60)
+        
         await engine.run_workload(
-            "Read-Heavy (2 Writer, 100 Readers)", 
-            scenario, num_readers=100, num_writers=2, iterations=10
+            "Read-Heavy", 
+            scenario, num_readers=100, num_writers=2
         )
 
         await engine.run_workload(
-            "Balanced (50 Writers, 50 Readers)", 
-            scenario, num_readers=50, num_writers=50, iterations=10
+            "Balance", 
+            scenario, num_readers=50, num_writers=50
         )
 
         await engine.run_workload(
-            "Write-Heavy (100 Writers, 2 Readers)", 
-            scenario, num_readers=2, num_writers=100, iterations=10
+            "Write-Heavy", 
+            scenario, num_readers=2, num_writers=100
         )
 
 if __name__ == '__main__':
@@ -131,7 +170,8 @@ if __name__ == '__main__':
         conditions=[
             AsyncStandardConditionWrapper,
             AsyncRWConditionWriteWrapper, 
-            AsyncRWConditionReadWrapper, 
+            AsyncRWConditionReadWrapper,
+            AsyncRWConditionReaderPhaseFairWrapper, 
             AsyncRWConditionFairWrapper
         ]
     ))

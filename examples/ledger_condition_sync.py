@@ -20,7 +20,7 @@ class LedgerConditionSync:
             
             # Atomic Downgrade: Lock becomes a Read lock.
             # We notify readers that a sync is STARTING.
-            await self._cond.write._lock_proxy.downgrade()
+            self._cond.write._lock_proxy.downgrade()
             self._cond.read.notify_all()
             
             # Now we perform the slow sync (Network Call) while holding a READ lock.
@@ -30,7 +30,7 @@ class LedgerConditionSync:
             self._sync_completed = True
             
             # We must release the read lock we obtained via downgrade.
-            await self._cond.read.release()
+            self._cond.read.release()
 
     async def wait_for_sync(self, reader_id: int) -> None:
         """Reader: Waits until the ledger is fully synced to the cloud."""

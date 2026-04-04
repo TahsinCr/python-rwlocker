@@ -10,9 +10,9 @@ it guarantees strict data safety while maximizing read concurrency and
 preventing CPU/Event-Loop bottlenecks.
 
 Key Architectural Features:
-    - **Multiple Scheduling Strategies**: Choose between Write-preferring, 
-      Read-preferring, and Fair (FIFO) algorithms to prevent starvation based 
-      on your specific workload.
+    - **Multiple Scheduling Strategies**: Choose between Write-preferring,
+      Read-preferring, Reader-Phase Fair, and Strict Fair algorithms to prevent
+      starvation based on your specific workload.
     - **O(1) Condition Queuing (Stampede Protection)**: Condition variables 
       (`RWCondition`, `AsyncRWCondition`) utilize pure O(1) waiter queues 
       to completely eliminate O(N) cache stampedes and event-loop blocking 
@@ -36,15 +36,15 @@ Important Usage Notes & Gotchas:
     - **Reentrancy (`ReentrantWriter` variants)**: Reentrancy is STRICTLY supported for 
       nested *write* operations by the same Thread/Task. It does NOT implicitly 
       grant read locks. You must use `.downgrade()` if you need to read.
-    - **Downgrade Performance Cost**: Calling `.downgrade()` registers the current 
-      Thread/Task ID into a tracking set. This adds a minor O(1) hash lookup cost 
-      during the subsequent `release()` operation. Standard operations remain O(0).
+    - **Downgrade Performance Cost**: Calling `.downgrade()` stores a single
+      downgrade-owner marker so the subsequent `release()` can safely route to
+      the read side. Standard fast paths remain allocation-free.
     - **Circular References**: Base lock classes hold references to their proxies, 
       and proxies hold references back to the base. Memory is reclaimed via 
       Python's cyclic GC. Do not rely on `__del__` for cleanup.
 
 Basic Example:
-    >>> lock = RWLockFIFOReentrantWriter()
+    >>> lock = RWLockWriteReentrantWriter()
     >>> with lock.write:
     ...     # Exclusive write access
     ...     lock.write.downgrade()
@@ -64,4 +64,4 @@ Basic Example:
 from .thread_rwlock import *
 from .async_rwlock import *
 
-__version__ = '3.2'
+__version__ = '3.3'

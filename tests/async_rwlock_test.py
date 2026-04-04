@@ -5,6 +5,7 @@ from typing import Type
 from rwlocker.async_rwlock import (
     AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
     AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
+    AsyncRWLockReaderPhaseFair, AsyncRWLockReaderPhaseFairReentrantWriter,
     AsyncRWLockFair, AsyncRWLockFairReentrantWriter,
     AsyncRWLockBase, AsyncLock
 )
@@ -145,6 +146,14 @@ class AsyncRWLockTests(BaseAsyncLockTests):
         self.lock.read.release()
         await t
 
+    async def test_manual_read_release_after_downgrade_does_not_poison_next_write_release(self):
+        self.assertTrue(await self.lock.write.acquire())
+        self.lock.write.downgrade()
+        self.lock.read.release()
+        self.assertTrue(await self.lock.write.acquire())
+        self.lock.write.release()
+        self.assertFalse(self.lock.write.locked())
+
     async def test_task_cancellation_during_wait(self):
         await self.lock.write.acquire()
         
@@ -252,6 +261,62 @@ class ReentrantWriterAsyncTestsMixin:
         self.lock.write.release()
 
 
+class FairPhaseAsyncTestsMixin:
+    async def test_late_reader_barging_behavior(self):
+        await self.lock.write.acquire()
+        release_first_reader = asyncio.Event()
+        first_reader_entered = asyncio.Event()
+        late_reader_entered = asyncio.Event()
+        writer_entered = asyncio.Event()
+        order: list[str] = []
+
+        async def first_reader():
+            async with self.lock.read:
+                order.append('first_reader')
+                first_reader_entered.set()
+                await asyncio.wait_for(release_first_reader.wait(), timeout=1.0)
+
+        async def late_reader():
+            async with self.lock.read:
+                order.append('late_reader')
+                late_reader_entered.set()
+
+        async def writer():
+            async with self.lock.write:
+                order.append('writer')
+                writer_entered.set()
+
+        first_reader_task = asyncio.create_task(first_reader())
+        writer_task = asyncio.create_task(writer())
+
+        await asyncio.sleep(0.05)
+        self.lock.write.release()
+
+        await asyncio.wait_for(first_reader_entered.wait(), timeout=1.0)
+        late_reader_task = asyncio.create_task(late_reader())
+
+        if self.expect_late_reader_barging:
+            await asyncio.wait_for(late_reader_entered.wait(), timeout=1.0)
+            self.assertFalse(writer_entered.is_set(), "Queued writer should still wait while the open reader phase continues.")
+        else:
+            await asyncio.sleep(0.1)
+            self.assertFalse(late_reader_entered.is_set(), "Strict fair locks must block readers that arrive after the reader phase has started.")
+            self.assertFalse(writer_entered.is_set(), "Writer should still be waiting while the reserved reader is active.")
+
+        release_first_reader.set()
+        await asyncio.wait_for(first_reader_task, timeout=1.0)
+        await asyncio.wait_for(writer_task, timeout=1.0)
+        await asyncio.wait_for(late_reader_task, timeout=1.0)
+
+        self.assertEqual(order[0], 'first_reader')
+        if self.expect_late_reader_barging:
+            self.assertEqual(order[1], 'late_reader')
+            self.assertEqual(order[2], 'writer')
+        else:
+            self.assertEqual(order[1], 'writer')
+            self.assertEqual(order[2], 'late_reader')
+
+
 class TestAsyncRWLockWrite(AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockWrite
 
@@ -264,14 +329,25 @@ class TestAsyncRWLockRead(AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
 class TestAsyncRWLockReadReentrantWriter(ReentrantWriterAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockReadReentrantWriter
 
-class TestAsyncRWLockFair(AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
-    lock_class = AsyncRWLockFair
+class TestAsyncRWLockReaderPhaseFair(FairPhaseAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = AsyncRWLockReaderPhaseFair
+    expect_late_reader_barging = True
 
-class TestAsyncRWLockFairReentrantWriter(ReentrantWriterAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
+class TestAsyncRWLockReaderPhaseFairReentrantWriter(ReentrantWriterAsyncTestsMixin, FairPhaseAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = AsyncRWLockReaderPhaseFairReentrantWriter
+    expect_late_reader_barging = True
+
+class TestAsyncRWLockFair(FairPhaseAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = AsyncRWLockFair
+    expect_late_reader_barging = False
+
+class TestAsyncRWLockFairReentrantWriter(ReentrantWriterAsyncTestsMixin, FairPhaseAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockFairReentrantWriter
+    expect_late_reader_barging = False
 
 class TestAsyncLock(BaseAsyncLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncLock
+
 
 if __name__ == '__main__':
     unittest.main()

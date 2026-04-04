@@ -18,6 +18,31 @@ class BaseConditionTests:
             self.lock = self.lock_class()
             self.condition = Condition(self.lock)
 
+    def _wait_for_condition_waiters(self, expected: int, fallback_delay: float = 0.2, timeout: float = 2.0) -> None:
+        if not hasattr(self.condition, '_waiters') or not hasattr(self.condition, '_internal_lock'):
+            time.sleep(fallback_delay)
+            return
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self.condition._internal_lock:
+                if len(self.condition._waiters) >= expected:
+                    return
+            time.sleep(0.005)
+        time.sleep(0.05)
+
+    def _join_threads_or_fail(self, threads: list[threading.Thread], timeout: float, context: str) -> None:
+        deadline = time.monotonic() + timeout
+        for thread in threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+
+        stuck = [thread.name or f"Thread-{index}" for index, thread in enumerate(threads) if thread.is_alive()]
+        if stuck:
+            self.fail(f"{context} did not finish in time. Still alive: {', '.join(stuck)}")
+
     def test_initial_state(self):
         self.assertFalse(self.condition.read.locked())
         self.assertFalse(self.condition.write.locked())
@@ -57,7 +82,7 @@ class BaseConditionTests:
             event_happened = True
             self.condition.write.notify()
 
-        t.join()
+        self._join_threads_or_fail([t], timeout=2.0, context="Single waiter thread")
         self.assertTrue(wait_success, "The waiter thread should successfully wake up and evaluate the predicate.")
 
     def test_notify_all_wakes_multiple_waiters(self):
@@ -76,14 +101,13 @@ class BaseConditionTests:
         for t in threads:
             t.start()
 
-        time.sleep(0.1)
+        self._wait_for_condition_waiters(len(threads), fallback_delay=0.1)
 
         with self.condition.write:
             event_happened = True
             self.condition.write.notify_all()
 
-        for t in threads:
-            t.join()
+        self._join_threads_or_fail(threads, timeout=5.0, context="notify_all waiters")
 
         self.assertEqual(wait_count, 5, "All waiting threads should have been awoken by notify_all().")
 
@@ -102,7 +126,7 @@ class BaseConditionTests:
         for t in threads:
             t.start()
 
-        time.sleep(0.1)
+        self._wait_for_condition_waiters(len(threads), fallback_delay=0.1)
 
         with self.condition.write:
             # Wake exactly 2 threads out of 4
@@ -115,8 +139,7 @@ class BaseConditionTests:
         with self.condition.write:
             self.condition.write.notify_all()
             
-        for t in threads:
-            t.join()
+        self._join_threads_or_fail(threads, timeout=5.0, context="notify(n) waiters")
 
         # The count logic here verifies if the *first* batch of wakeups behaved as expected.
         # This is a bit tricky to assert deterministically in threads, but waking all at the end
@@ -139,14 +162,13 @@ class BaseConditionTests:
         for t in threads:
             t.start()
 
-        time.sleep(0.2) 
+        self._wait_for_condition_waiters(len(threads), fallback_delay=0.2, timeout=3.0)
 
         with self.condition.write:
             event_happened = True
             self.condition.write.notify_all()
 
-        for t in threads:
-            t.join()
+        self._join_threads_or_fail(threads, timeout=8.0, context="massive notify_all waiters")
 
         self.assertEqual(wait_count, 100, "All 100 threads must wake up correctly during a massive broadcast without deadlocks.")
 

@@ -42,13 +42,13 @@ Standard `Condition` structures in the library wake up all waiting threads/tasks
 * **Smart Proxy Architecture:** Intuitive usage of `with` and `async with` context managers via `.read` and `.write` proxies.
 * **Atomic Downgrading:** The ability to instantly downgrade a Write lock to a Read lock (`downgrade()`) without completely releasing the lock, preventing other writers from slipping in.
 * **Safe Reentrancy:** O(1) memory pointer tracking allowing the same thread or task to repeatedly acquire a write lock without causing a Deadlock.
-* **Cancellation Safety:** Full resilience against task cancellations (`CancelledError`) in the `asyncio` environment. Cancelled tasks do not corrupt the system state and safely wake up waiting tasks.
-* **O(1) Condition Queuing (Stampede Protection):** Unlike standard libraries, it does not perform O(N) scanning on `notify_all()` calls. It wakes up hundreds of tasks instantly without choking the CPU.
-* **Smart Signaling:** The ability to accurately wake up only the exact number of tasks you need, such as `notify(n=5)`, without creating a "Thundering Herd" in the system.
-* **Flawless Cancellation Shielding:** If a task is cancelled from the outside (`CancelledError`) while waiting in an asynchronous `Condition.wait()`, the lock state is never corrupted. The lock is safely re-acquired and passed on to other waiters.
-* **100% Drop-in Replacement:** You can inject your advanced locks (`RWLockFair`, etc.) directly into third-party libraries (SQLAlchemy, requests, FastAPI, etc.) expecting standard `threading.Lock` or `asyncio.Lock` instances without making any code changes. Standard API calls (e.g., `lock.acquire()`) are automatically and safely routed to the `.write` (exclusive) proxy.
-* **"Happy Path" Performance Isolation:** A next-generation, OS-Interrupt-resilient micro-queue architecture that completely bypasses O(N) cost cleanup operations upon successful lock wake-ups, completing the process with zero CPU overhead.
-* **Standard Adapters:** `Lock`, `Condition`, `AsyncLock`, and `AsyncCondition` standard wrapper classes for dependency injections where advanced RWLock features are not required but the same architectural signature (`.read`, `.write`) is desired.
+* **Pure O(1) Condition Variables:** Unlike standard `Condition` structures, it does not iterate through the waiting list one by one during `notify_all()` calls (bypassing O(N) scanning costs). Thanks to its customized C-level micro-queue architecture, it wakes up thousands of tasks instantly without causing a "Cache Stampede" and choking the CPU.
+* **Asynchronous Cancellation Safety & Shielding:** Full resilience against task cancellations (`CancelledError`) in the `asyncio` environment. If a task is cancelled while waiting for a lock or inside `Condition.wait()`, the system state is never corrupted. The lock is safely recovered, no "zombie" waiters are left behind, and wait queues remain perfectly clean.
+* **100% Drop-in Replacement:** You can inject your advanced locks (`RWLockFair`, etc.) and conditions (`RWCondition`, etc.) directly into third-party libraries (SQLAlchemy, requests, FastAPI, etc.) expecting standard `threading.Lock`, `asyncio.Lock`, `threading.Condition`, or `asyncio.Condition` instances without making any code changes. Standard API calls (e.g., `lock.acquire()`, `cond.wait()`) are automatically and safely routed to the `.write` (exclusive) proxy.
+* **"Happy Path" Performance Isolation:** A next-generation architecture that completely bypasses O(N) cost garbage cleanup operations upon successful lock and queue wake-ups. It provides absolute protection against OS-Interrupts and timeouts while completing successful wake-ups with zero CPU overhead.
+* **Standard Adapters:** Includes standard wrappers for Dependency Injection workflows where you want to maintain the exact same architectural signature (`.read` and `.write`) but do not require advanced lock strategies.
+    * *Lock Adapters:* `Lock` (Thread), `AsyncLock` (Asyncio)
+    * *Condition Adapters:* `Condition` (Thread), `AsyncCondition` (Asyncio)
 
 ### 🛡️ Lock Strategies
 
@@ -58,7 +58,8 @@ You can select the right lock strategy based on your system's bottleneck profile
 | --- | --- | --- | --- |
 | **Writer-Preferring** | `RWLockWrite` / `AsyncRWLockWrite` | Forbids new readers from entering if there is a waiting writer. Prevents writer starvation. | To prevent writers from being overwhelmed in read-heavy systems. |
 | **Reader-Preferring** | `RWLockRead` / `AsyncRWLockRead` | Continuously allows new readers in, even if writers are waiting. Provides maximum parallelism. | In cache structures where write operations are very rare or non-critical. |
-| **Fair** | `RWLockFair` / `AsyncRWLockFair` | Grants access alternately between readers and writers (interleaving). Prevents starvation for both sides. | In high-frequency, bidirectional traffic (MAVLink, WebSockets, etc.). |
+| **Reader-Phase Fair** | `RWLockReaderPhaseFair` / `AsyncRWLockReaderPhaseFair` | Alternates between reader and writer phases, but late readers may still join an already-open reader phase for higher read throughput. | When you want bounded fairness without fully freezing each reader batch. |
+| **Fair** | `RWLockFair` / `AsyncRWLockFair` | Freezes each reader phase at phase start so late readers cannot cut in front of an already-queued writer. Prevents starvation for both sides with stricter ordering. | In high-frequency, bidirectional traffic (MAVLink, WebSockets, etc.) where deterministic writer latency matters. |
 > 💡 **Condition Compatibility:** The `RWCondition` and `AsyncRWCondition` classes in the library are designed to encapsulate all the lock strategies mentioned above (Dependency Injection). You can choose the lock that best fits your system and transform it into a state machine running at pure O(1) speed.
 <br/>
 
@@ -87,7 +88,7 @@ The performance results demonstrate `rwlocker`'s true potential during Network a
 
 **🖥️ Test Environment:** All tests were executed on an **Intel Core i7-12700H (2.4GHz)** processor running **EndeavourOS (Arch-based Linux)**, using **Python 3.14.3** and the experimental **Free-Threading (3.14.3t)** interpreters.
 
-**🧪 Methodology:** To ensure absolute precision and zero margin of error, all reader and writer entities (threads or async tasks) are spawned in advance and held at a starting line using a synchronization `Event`. Once the event triggers, they execute simultaneously. The workloads strictly follow an `IOBoundScenario` that enforces a precise `time.sleep(0.001)` or `asyncio.sleep(0.001)` delay to accurately simulate real network/database I/O latency.
+**🧪 Methodology:** To ensure absolute precision and zero margin of error, all reader and writer entities (threads or async tasks) are spawned in advance and held at a starting line using a synchronization `Event`. Once the event triggers, they execute simultaneously. The workloads strictly follow an `IOBoundScenario` that enforces a precise `time.sleep(0.001)` or `asyncio.sleep(0.001)` delay across 10 consecutive iterations to accurately simulate real network/database I/O latency.
 
 ### 1. Read-Write Lock (RWLock) Benchmarks
 
@@ -104,12 +105,12 @@ In the Read-Heavy scenario, standard C-based locks choke the system, whereas `rw
 Standard `Condition` variables iterate through all sleeping threads/tasks one by one `O(N)` during a broadcast (`notify_all`), causing massive CPU spikes and "Cache Stampedes". `rwlocker` completely eradicates this with its pure `O(1)` queueing architecture.
 
 **Synchronous (Thread) RWCondition Performance:**
-When 100 sleeping readers are awakened simultaneously, `rwlocker` processes them instantly without locking the OS. This architectural leap results in a mind-blowing **~45x speedup** compared to the standard library's `threading.Condition`.
+When 100 sleeping readers are awakened simultaneously, `rwlocker` processes them instantly without locking the OS. This architectural leap results in a **~45x speedup** compared to the standard library's `threading.Condition`.
 
 **Asynchronous (Asyncio) RWCondition Performance:**
 In event-driven caching systems, waking up hundreds of waiting web requests simultaneously is a major bottleneck. The `AsyncRWCondition` completely bypasses standard asyncio constraints, reaching up to **~45x higher throughput** during massive broadcast scenarios, completely saving the loop from freezing.
 
-*(Note: All lock, adapter, and condition classes have passed a massive suite of **315 different unit tests** covering reentrancy, deadlock, timeout, OS interrupts, O(N) leaks, and cancellation safety scenarios with 0 errors, and this entire test suite was completed in just **13.2 seconds**.)*
+*(Note: All lock, adapter, and condition classes have passed a massive suite of **412 different unit tests** covering reentrancy, deadlock, timeout, OS interrupts, O(N) leaks, and cancellation safety scenarios with 0 errors, and this entire test suite was completed in just **15.7 seconds**.)*
 
 
 <br/>
@@ -119,7 +120,7 @@ In event-driven caching systems, waking up hundreds of waiting web requests simu
 ### 🛠️ Dependencies
 
 * No external dependencies.
-* Only Python Standard Library (`threading`, `asyncio`, `typing`, `collections`, `weakref`).
+* Only Python Standard Library (`threading`, `asyncio`, `typing`, `collections`).
 * Fully compatible with Python 3.9+.
 
 ### 📦 Installation

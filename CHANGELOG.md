@@ -1,6 +1,115 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
+## **[3.3] - 04.04.2026**
+The **"Fairness, Protocol Isolation & Benchmark Reliability"** update. This version re-introduces carefully scoped internal mixins without changing the public monolithic API, formalizes the distinction between Reader-Phase Fair and Strict Fair scheduling, isolates protocol and queue infrastructure to reduce cross-runtime import cost, hardens downgrade routing in both Thread and Async implementations, and substantially upgrades the benchmark/reporting toolchain and documentation surface.
+
+### Added
+* **Reader-Phase Fair Scheduling Family**:
+    * Added `RWLockReaderPhaseFair` / `AsyncRWLockReaderPhaseFair` and their `ReentrantWriter` variants as first-class public scheduling strategies.
+    * These variants explicitly preserve the "reader phase may continue to admit later readers" behavior, separating it from strict fair semantics.
+    * This makes the lock family easier to reason about by giving the old phase-oriented behavior an honest, descriptive public name.
+* **Shared Base & Protocol Module (`rwlocker/base.py`)**:
+    * Introduced a central base module to house `Lockable`, `ConditionLockable`, and their async counterparts together with the shared `RWLockBase`, `AsyncRWLockBase`, `RWConditionBase`, and `AsyncRWConditionBase` abstractions.
+    * Added a minimal async future protocol used by queue implementations.
+    * This removes duplicated protocol and base-class declarations from `thread_rwlock.py` and `async_rwlock.py` while keeping the runtime-specific modules independent from one another.
+* **Runtime-Agnostic Queue Module (`rwlocker/queues.py`)**:
+    * Added reusable `ThreadWaitQueue`, `AsyncWaitQueue`, `ThreadConditionQueue`, and `AsyncConditionQueue` primitives as a dedicated internal infrastructure layer.
+    * The queue module is now built around injected primitives/factories rather than direct top-level `threading` / `asyncio` imports, reducing cross-runtime import coupling.
+* **Reintroduced Internal State-Machine Mixins (`rwlocker/mixins.py`)**:
+    * Re-added internal mixins to centralize identical non-public logic shared by thread and async lock families.
+    * The mixins only contain internal `_` helpers and state-machine rules; all user-facing methods remain in the concrete monolithic modules.
+    * Follow-up performance measurements showed that the mixin-based indirection affected hot paths only at a negligible level relative to the reliability and maintenance gains, so the shared internal structure was restored.
+    * This restores maintainability benefits without moving public API methods behind mixin indirection.
+* **Dedicated Benchmark Base Test Suite**:
+    * Added `tests/benchmark_base_test.py` to validate baseline selection, warmup handling, target rotation, aggregation, and garbage-collection behavior in the benchmark framework.
+
+### Updated
+* **Strict Fair vs Reader-Phase Fair Semantics**:
+    * Reworked the Fair family so `RWLockFair` / `AsyncRWLockFair` represent the strict fair contract.
+    * A reader phase in strict fair mode now snapshots the waiting readers at phase start and prevents late-reader barging ahead of queued writers.
+    * The older throughput-leaning phase behavior remains available via `ReaderPhaseFair`.
+* **Downgrade Routing and Release Safety (Thread & Async)**:
+    * Replaced multi-entry downgrade tracking with a single downgrade-owner marker in async writer proxies.
+    * Preserved the thread-side single downgrade owner model and hardened it further.
+    * A successful new write acquisition now clears stale downgrade state, preventing incorrect release routing after flows such as:
+      `write.acquire() -> downgrade() -> read.release() -> write.acquire() -> write.release()`
+* **Async Base Lock Compatibility**:
+    * Corrected the base async context-manager exit path by implementing `__aexit__` correctly.
+    * This restores proper drop-in replacement behavior for `async with lock:` and `async with cond:`.
+* **Condition Infrastructure**:
+    * `RWCondition` and `AsyncRWCondition` now use the new queue layer for waiter management while preserving the same external API.
+    * Thread-side condition waiters continue to use a dedicated micro-lock for queue integrity, while async conditions stay event-loop-native.
+* **Cleaner Internal DRY Boundaries**:
+    * Shared reentrant-writer logic, fair-phase logic, and condition queue hooks were consolidated into mixins only where thread and async behavior truly matched.
+    * Runtime-specific owner tracking, cancellation behavior, and public method surfaces remain in the concrete modules.
+* **Base-Class Extraction from Monolithic Modules**:
+    * The shared `RWLockBase` / `RWConditionBase` hierarchy, together with the async base hierarchy, was moved out of the monolithic thread and async modules into `rwlocker/base.py`.
+    * This keeps the public API intact while reducing duplication and making the concrete modules more focused on runtime-specific proxy and state-machine behavior.
+* **Benchmark Framework Overhaul**:
+    * The benchmark system was reorganized around reusable base classes and scenario objects.
+    * `BenchmarkConfig` now exposes clear profiles such as `faster()`, `interactive()`, and `reporting()`.
+    * Benchmark handlers were generalized so results can be printed or collected structurally for figure generation.
+* **Benchmark Console Output**:
+    * Reworked terminal printing to be more compact and readable with better column sizing, baseline highlighting, wrapped long names, and optional ANSI colors.
+    * Baseline rows are now clearly marked with `BL`, and metadata such as `Ops` is surfaced more cleanly.
+* **Benchmark Coverage for the Expanded Lock Family**:
+    * Thread and async benchmark scripts now include the `ReaderPhaseFair` and `Fair` families together with their reentrant variants.
+    * Condition benchmarks were expanded in the same spirit so all primary scheduling strategies can be compared consistently.
+* **Benchmark Plot Generation**:
+    * Refined the figure-generation pipeline and plotting style handling.
+    * Plot configuration, label formatting, category mapping, and annotation logic were cleaned up for more legible generated charts.
+
+### Fixed
+* **Late Reader Barging in Strict Fair Locks**:
+    * Fixed the core behavioral bug where late readers could still slip into what was supposed to be a strict fair reader phase.
+    * Strict fair locks now reserve the phase for the readers already queued at phase start.
+* **Downgrade Poisoning Bug After Manual Read Release**:
+    * Fixed both thread and async cases where manually releasing the downgraded read side could poison a future `write.release()` call.
+    * Regression tests now cover this path explicitly.
+* **Async Condition Cancellation / Waiter Cleanup Safety**:
+    * Hardened async condition waiting so waiter cleanup remains correct if release fails or a task is cancelled while waiting.
+    * This prevents stale waiters and protects the lock state from corruption under `CancelledError`.
+* **Massive `notify_all()` Reliability Under RWCondition**:
+    * Reworked the condition/fairness interaction so large thread wake-up storms remain stable even under Fair locks.
+    * Thread condition tests that stress `notify_all()` with 100 waiters now pass reliably instead of hanging or timing out.
+* **Async Benchmark Execution Bug**:
+    * Fixed async benchmark workers so scenarios that return synchronously no longer trigger `TypeError: 'NoneType' object can't be awaited`.
+* **Backward-Compatible Queue Patch Hook**:
+    * Restored the private `_ThreadWaitQueue` compatibility alias used by existing tests and local patch hooks.
+* **Read-Preference Writer Wakeup Edge Case**:
+    * Eliminated unnecessary writer wakeups in read-preferring paths when readers should continue to dominate.
+* **Condition Test Stability**:
+    * Updated thread condition tests to fail fast with time-bounded joins instead of appearing to hang indefinitely.
+
+### Documentation
+* **README & PyPI Documentation Refresh**:
+    * Updated `README.md`, `README_tr.md`, `README_ru.md`, and `README-pypi.md` to reflect the 3.3 API, benchmark methodology, and lock-family distinctions.
+* **Concrete Class Examples Completed**:
+    * Added or corrected example blocks for concrete `RWLock*`, `AsyncRWLock*`, `RWCondition*`, and `AsyncRWCondition*` classes, including the Fair variants that previously lacked the same level of example coverage.
+* **Package-Level Documentation Corrections**:
+    * Updated the root package documentation to describe `Reader-Phase Fair` and `Strict Fair` separately.
+    * Corrected outdated class-name references and aligned downgrade behavior notes with the new single-marker routing model.
+* **Async Downgrade Documentation Accuracy**:
+    * Removed incorrect `await lock.write.downgrade()`-style guidance.
+    * Async downgrade remains a synchronous state transition, and the docs now reflect that consistently.
+
+### Testing
+* **Expanded Lock Regression Tests**:
+    * Added or strengthened tests for:
+      - late reader barging behavior,
+      - reader-phase `notify_all()` usage,
+      - downgrade-started reader phases,
+      - stale downgrade marker cleanup,
+      - cross-thread / cross-task release protection,
+      - cancellation safety in async wait paths.
+* **Expanded Condition Stress Tests**:
+    * Strengthened condition tests around timeout handling, `notify(n)`, `notify_all()`, and downgrade release safety for both thread and async variants.
+* **Validation Result**:
+    * The full local test suite now runs cleanly at **412 tests** for version 3.3.
+
+<br>
+
 ## **[3.2] - 22.03.2026**
 The **"Absolute Speed & Memory Safety"** update. This version strictly prioritizes raw execution speed by reversing the DRY-oriented mixin architecture, introduces O(1) memory optimizations for thread state downgrades, completely eliminates a critical memory leak in async task tracking via weak references, and refines type hinting for standard adapters.
 
