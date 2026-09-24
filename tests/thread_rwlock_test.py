@@ -17,13 +17,25 @@ class BaseLockTests:
     lock_class: Type[RWLockBase] = None
     lock_inner: Type[threading.Lock] = None
 
+    def _is_locked(self, proxy):
+        locked = getattr(proxy, "locked", None)
+        if locked is not None:
+            return locked()
+        is_owned = getattr(proxy, "_is_owned", None)
+        if is_owned is not None:
+            return is_owned()
+        acquired = proxy.acquire(blocking=False)
+        if acquired:
+            proxy.release()
+        return not acquired
+
     def setUp(self):
         if self.lock_class:
             self.lock = self.lock_class(self.lock_inner() if self.lock_inner else None)
 
     def test_initial_state(self):
-        self.assertFalse(self.lock.read.locked())
-        self.assertFalse(self.lock.write.locked())
+        self.assertFalse(self._is_locked(self.lock.read))
+        self.assertFalse(self._is_locked(self.lock.write))
 
     def test_multiple_readers_concurrently(self):
         acquired_flags = []
@@ -43,12 +55,12 @@ class BaseLockTests:
 
     def test_context_managers(self):
         with self.lock.write:
-            self.assertTrue(self.lock.write.locked())
-        self.assertFalse(self.lock.write.locked())
+            self.assertTrue(self._is_locked(self.lock.write))
+        self.assertFalse(self._is_locked(self.lock.write))
 
         with self.lock.read:
-            self.assertTrue(self.lock.read.locked())
-        self.assertFalse(self.lock.read.locked())
+            self.assertTrue(self._is_locked(self.lock.read))
+        self.assertFalse(self._is_locked(self.lock.read))
 
     def test_unacquired_release_raises(self):
         with self.assertRaises(RuntimeError, msg="Releasing an unacquired write lock should raise RuntimeError."):
@@ -56,6 +68,28 @@ class BaseLockTests:
         
         with self.assertRaises(RuntimeError, msg="Releasing an unacquired read lock should raise RuntimeError."):
             self.lock.read.release()
+
+    def test_reader_release_must_match_acquiring_thread(self):
+        if not hasattr(self.lock, "_reader_owners"):
+            self.skipTest("The standard lock adapter follows threading.Lock ownership semantics.")
+        acquired = threading.Event()
+        release_reader = threading.Event()
+
+        def reader():
+            self.lock.read.acquire()
+            acquired.set()
+            release_reader.wait()
+            self.lock.read.release()
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        self.assertTrue(acquired.wait(1.0))
+        with self.assertRaisesRegex(RuntimeError, "current thread"):
+            self.lock.read.release()
+        self.assertFalse(self.lock.write.acquire(blocking=False))
+        release_reader.set()
+        thread.join(1.0)
+        self.assertFalse(thread.is_alive())
 
     def test_exception_handling_in_context_manager(self):
         class CustomException(Exception): pass
@@ -65,16 +99,24 @@ class BaseLockTests:
                 raise CustomException()
         except CustomException:
             pass
-        self.assertFalse(self.lock.write.locked(), "Write lock must be released if an exception occurs inside the context.")
+        self.assertFalse(self._is_locked(self.lock.write), "Write lock must be released if an exception occurs inside the context.")
 
         try:
             with self.lock.read:
                 raise CustomException()
         except CustomException:
             pass
-        self.assertFalse(self.lock.read.locked(), "Read lock must be released if an exception occurs inside the context.")
+        self.assertFalse(self._is_locked(self.lock.read), "Read lock must be released if an exception occurs inside the context.")
 
 class RWLockTests(BaseLockTests):
+    def _wait_for_waiters(self, readers=0, writers=0, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.lock.read.those_waiting >= readers and self.lock.write.those_waiting >= writers:
+                return
+            time.sleep(0.001)
+        self.fail(f"Expected at least {readers} readers and {writers} writers to be queued")
+
     def test_lock_status_reflection(self):
         self.lock.read.acquire()
         self.assertTrue(self.lock.read.locked())
@@ -139,7 +181,7 @@ class RWLockTests(BaseLockTests):
         t = threading.Thread(target=reader_func)
         t.start()
         
-        time.sleep(0.05)
+        self._wait_for_waiters(readers=1)
         self.assertFalse(reader_acquired.is_set(), "Reader should block while write lock is held.")
         
         self.lock.write.downgrade()
@@ -282,7 +324,7 @@ class FairPhaseTestsMixin:
         ]
         writer = self._start_waiting_writer(writer_entered)
 
-        time.sleep(0.05)
+        self._wait_for_waiters(readers=2, writers=1)
         self.lock.write.release()
 
         self.assertTrue(first_reader_entered.wait(1.0), "First waiting reader should enter the fair reader phase.")
@@ -309,7 +351,7 @@ class FairPhaseTestsMixin:
         ]
         writer = self._start_waiting_writer(writer_entered)
 
-        time.sleep(0.05)
+        self._wait_for_waiters(readers=2, writers=1)
         self.lock.write.downgrade()
 
         self.assertTrue(first_reader_entered.wait(1.0), "Downgrade should let queued readers join the new reader phase.")
@@ -341,7 +383,7 @@ class FairPhaseTestsMixin:
         with patch.object(thread_rwlock_mod.ThreadWaitQueue, 'notify_all', new=counting_notify_all):
             reader = self._start_waiting_reader(reader_entered, release_readers)
             writer = self._start_waiting_writer(writer_entered)
-            time.sleep(0.05)
+            self._wait_for_waiters(readers=1, writers=1)
             self.lock.write.release()
 
             self.assertTrue(reader_entered.wait(1.0))
@@ -394,7 +436,7 @@ class FairPhaseTestsMixin:
         first_reader_thread.start()
         writer_thread.start()
 
-        time.sleep(0.05)
+        self._wait_for_waiters(readers=1, writers=1)
         self.lock.write.release()
 
         self.assertTrue(first_reader_entered.wait(1.0))
@@ -405,7 +447,7 @@ class FairPhaseTestsMixin:
             self.assertTrue(late_reader_entered.wait(1.0), "Reader-phase fair locks should allow late readers to join an open reader phase.")
             self.assertFalse(writer_entered.is_set(), "Queued writer should still wait while the open reader phase continues.")
         else:
-            time.sleep(0.1)
+            self._wait_for_waiters(readers=1)
             self.assertFalse(late_reader_entered.is_set(), "Strict fair locks must block readers that arrive after the reader phase has started.")
             self.assertFalse(writer_entered.is_set(), "Writer should still be waiting while the reserved reader is active.")
 
@@ -459,6 +501,20 @@ class TestLock(BaseLockTests, unittest.TestCase):
 class TestRLock(BaseLockTests, unittest.TestCase):
     lock_class = Lock
     lock_inner = threading.RLock
+
+
+class TestRWLockConstructorInjection(unittest.TestCase):
+    def test_proxy_lock_constructors_preserve_injected_lock(self):
+        lock_classes = (
+            RWLockWrite, RWLockWriteReentrantWriter,
+            RWLockRead, RWLockReadReentrantWriter,
+            RWLockReaderPhaseFair, RWLockReaderPhaseFairReentrantWriter,
+            RWLockFair, RWLockFairReentrantWriter,
+        )
+        for lock_class in lock_classes:
+            with self.subTest(lock_class=lock_class.__name__):
+                injected_lock = threading.Lock()
+                self.assertIs(lock_class(injected_lock)._lock, injected_lock)
 
 
 if __name__ == '__main__':

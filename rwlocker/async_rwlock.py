@@ -7,6 +7,8 @@ Python's `asyncio` event loop, supporting different scheduling strategies
 (Write-preferring, Read-preferring, Reader-Phase Fair, Strict Fair) and safe
 reentrancy for writer tasks.
 """
+from __future__ import annotations
+
 import asyncio
 from abc import abstractmethod
 from typing import Callable, Optional
@@ -35,7 +37,7 @@ from .queues import (
     AsyncConditionQueue
 )
 
-__version__ = '3.3'
+__version__ = '3.4'
 __all__ = (
     'AsyncLockable', 'AsyncLockDowngradable', 
     'AsyncRWLockBase', 'AsyncRWLockWithProxyBase', 
@@ -198,10 +200,37 @@ class AsyncRWLockWithProxyBase(AsyncRWLockBase):
     exposing `read` and `write` attributes as proxy instances that safely handle 
     task cancellation and route logic to the overridden internal core methods.
     """
-    __slots__ = ()
+    __slots__ = ("_reader_owners", "_writer_owner")
     def __init__(self):
+        self._reader_owners = {}
+        self._writer_owner = None
         self.read:AsyncRWLockReaderProxy = AsyncRWLockReaderProxy(rwlock=self)
         self.write:AsyncRWLockWriterProxy = AsyncRWLockWriterProxy(rwlock=self)
+
+    def _current_reader_owner(self):
+        return asyncio.current_task()
+
+    def _record_reader_acquire(self) -> None:
+        owner = self._current_reader_owner()
+        self._reader_owners[owner] = self._reader_owners.get(owner, 0) + 1
+
+    def _record_reader_release(self) -> None:
+        owner = self._current_reader_owner()
+        count = self._reader_owners.get(owner, 0)
+        if count == 0:
+            raise RuntimeError("Read lock is not held by the current task")
+        if count == 1:
+            del self._reader_owners[owner]
+        else:
+            self._reader_owners[owner] = count - 1
+
+    def _is_current_reader(self) -> bool:
+        return self._reader_owners.get(self._current_reader_owner(), 0) > 0
+
+    def _is_current_writer(self) -> bool:
+        if hasattr(self, "_writer_id"):
+            return self._writer_id is self._current_reader_owner()
+        return self._writer_owner is self._current_reader_owner()
 
     @abstractmethod
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool: ...
@@ -243,7 +272,7 @@ class AsyncRWLockWrite(_RWLockWriteMixin, AsyncRWLockWithProxyBase):
         async with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockWrite()
         
@@ -268,8 +297,9 @@ class AsyncRWLockWriteReentrantWriter(
     Write-preferring Asynchronous Read-Write Lock with Task-Reentrancy.
     
     Reentrancy Note:
-        Strictly supports nested *write* operations for the same `asyncio.Task`.
-        It does NOT implicitly grant read locks. Reentrancy is resolved via 
+        The owning task can acquire nested write locks and a read lock. Other
+        readers can join only after an explicit downgrade opens shared access.
+        Reentrancy is resolved via
         O(1) memory pointer comparison (`is` operator) of the asyncio Task.
     
     Example:
@@ -288,7 +318,7 @@ class AsyncRWLockWriteReentrantWriter(
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockWriteReentrantWriter()
         
@@ -336,7 +366,7 @@ class AsyncRWLockRead(_RWLockReadMixin, AsyncRWLockWithProxyBase):
         async with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockRead()
         
@@ -376,7 +406,7 @@ class AsyncRWLockReadReentrantWriter(_RWLockReadReentrantWriterMixin, AsyncRWLoc
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockReadReentrantWriter()
         
@@ -422,7 +452,7 @@ class AsyncRWLockReaderPhaseFair(_RWLockReaderPhaseFairMixin, AsyncRWLockWithPro
         async with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockReaderPhaseFair()
 
@@ -452,7 +482,7 @@ class AsyncRWLockReaderPhaseFairReentrantWriter(_RWLockReaderPhaseFairReentrantW
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockReaderPhaseFairReentrantWriter()
 
@@ -495,7 +525,7 @@ class AsyncRWLockFair(_RWLockFairMixin, AsyncRWLockReaderPhaseFair):
         async with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockFair()
 
@@ -524,7 +554,7 @@ class AsyncRWLockFairReentrantWriter(_RWLockFairReentrantWriterMixin, AsyncRWLoc
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncRWLockFairReentrantWriter()
 
@@ -569,7 +599,7 @@ class AsyncLock(AsyncRWLockBase):
         async with lock.write:
             print("Writing with standard async lock...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = AsyncLock()
         
@@ -699,7 +729,7 @@ class AsyncRWConditionProxy:
                 except asyncio.CancelledError as e:
                     err = e
             
-            # Re-raise the cancellation only AFTER the lock has been securely re-acquired.
+            # Re-raise cancellation only after the lock has been re-acquired.
             if err is not None:
                 raise err
 
@@ -707,9 +737,11 @@ class AsyncRWConditionProxy:
         """
         Wait until a specific condition (predicate) evaluates to True.
         
-        This utility method repeatedly calls `wait()` until the predicate 
-        returns a truthy value. For timeout functionality, wrap this call 
-        with `asyncio.wait_for()`.
+        This utility method repeatedly calls `wait()` until the predicate
+        returns a truthy value. For timeout functionality, wrap a coroutine
+        that acquires the condition, calls `wait_for()`, and releases it with
+        `asyncio.wait_for()`. This keeps lock ownership in the same task because
+        `asyncio.wait_for()` runs the wrapped coroutine in a task of its own.
 
         Args:
             predicate (Callable): A synchronous function returning a boolean 
@@ -837,11 +869,9 @@ class AsyncRWCondition(_RWConditionMixin, AsyncRWConditionWithProxyBase):
     """
     Standard implementation of an Asynchronous Read-Write Condition variable.
     
-    Utilizes a `collections.deque` containing `asyncio.Future` objects to provide 
-    pure O(1) task queuing and wake-ups. It is highly optimized for Python's 
-    single-threaded event loop, avoiding GIL-based context switches entirely, 
-    and offers native protection against Cache Stampede scenarios during 
-    massive `notify_all` calls.
+    Uses a `collections.deque` of `asyncio.Future` objects. Queue insertion and
+    FIFO removal are amortized O(1); `notify_all()` signals each waiter and is
+    O(N).
 
     Example:
         ```python
@@ -857,12 +887,12 @@ class AsyncRWCondition(_RWConditionMixin, AsyncRWConditionWithProxyBase):
             data_ready = True
             cond.write.notify_all()
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         cond = AsyncRWCondition()  # AsyncRWLockWrite default lock
         
         # Direct usage bypasses explicit .read/.write proxies and defaults to 
-        # the exclusive write state, providing 100% API compatibility with 
+        # the exclusive write state, providing lock-style compatibility with
         # standard asyncio.Condition workflows.
         async with cond:
             while not data_ready:
@@ -898,7 +928,7 @@ class AsyncCondition(AsyncRWConditionBase):
             data_ready = True
             cond.write.notify_all()
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         cond = AsyncCondition()
         

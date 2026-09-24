@@ -50,6 +50,26 @@ class BaseAsyncLockTests:
         with self.assertRaises(RuntimeError, msg="Releasing an unacquired read lock should raise RuntimeError."):
             self.lock.read.release()
 
+    async def test_reader_release_must_match_acquiring_task(self):
+        if not hasattr(self.lock, "_reader_owners"):
+            self.skipTest("The standard asyncio lock adapter follows asyncio.Lock semantics.")
+        acquired = asyncio.Event()
+        release_reader = asyncio.Event()
+
+        async def reader():
+            await self.lock.read.acquire()
+            acquired.set()
+            await release_reader.wait()
+            self.lock.read.release()
+
+        task = asyncio.create_task(reader())
+        await acquired.wait()
+        with self.assertRaisesRegex(RuntimeError, "current task"):
+            self.lock.read.release()
+        self.assertTrue(self.lock.read.locked())
+        release_reader.set()
+        await task
+
     async def test_exception_handling_in_context_manager(self):
         class CustomException(Exception): pass
         
@@ -68,6 +88,14 @@ class BaseAsyncLockTests:
         self.assertFalse(self.lock.read.locked(), "Read lock must be released if an exception occurs inside the context.")
 
 class AsyncRWLockTests(BaseAsyncLockTests):
+    async def _wait_for_waiters(self, readers=0, writers=0, timeout=1.0):
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if self.lock.read.those_waiting >= readers and self.lock.write.those_waiting >= writers:
+                return
+            await asyncio.sleep(0)
+        self.fail(f"Expected at least {readers} readers and {writers} writers to be queued")
+
     async def test_lock_status_reflection(self):
         await self.lock.read.acquire()
         self.assertTrue(self.lock.read.locked())
@@ -136,7 +164,7 @@ class AsyncRWLockTests(BaseAsyncLockTests):
                 reader_acquired.set()
 
         t = asyncio.create_task(reader_task())
-        await asyncio.sleep(0.05)
+        await self._wait_for_waiters(readers=1)
         self.assertFalse(reader_acquired.is_set(), "Reader should block while write lock is held.")
         
         self.lock.write.downgrade()
@@ -164,7 +192,7 @@ class AsyncRWLockTests(BaseAsyncLockTests):
 
         t = asyncio.create_task(reader_task())
         await wait_started.wait()
-        await asyncio.sleep(0.05) 
+        await self._wait_for_waiters(readers=1)
         
         t.cancel()
         try:
@@ -176,8 +204,11 @@ class AsyncRWLockTests(BaseAsyncLockTests):
         self.lock.write.release()
         
         try:
-            await asyncio.wait_for(self.lock.read.acquire(), timeout=0.5)
-            self.lock.read.release()
+            async def acquire_and_release():
+                await self.lock.read.acquire()
+                self.lock.read.release()
+
+            await asyncio.wait_for(acquire_and_release(), timeout=0.5)
         except asyncio.TimeoutError:
             self.fail("Could not acquire lock after a waiting task was cancelled. Wait queue might be corrupted.")
 
@@ -289,7 +320,7 @@ class FairPhaseAsyncTestsMixin:
         first_reader_task = asyncio.create_task(first_reader())
         writer_task = asyncio.create_task(writer())
 
-        await asyncio.sleep(0.05)
+        await self._wait_for_waiters(readers=1, writers=1)
         self.lock.write.release()
 
         await asyncio.wait_for(first_reader_entered.wait(), timeout=1.0)
@@ -299,7 +330,7 @@ class FairPhaseAsyncTestsMixin:
             await asyncio.wait_for(late_reader_entered.wait(), timeout=1.0)
             self.assertFalse(writer_entered.is_set(), "Queued writer should still wait while the open reader phase continues.")
         else:
-            await asyncio.sleep(0.1)
+            await self._wait_for_waiters(readers=1)
             self.assertFalse(late_reader_entered.is_set(), "Strict fair locks must block readers that arrive after the reader phase has started.")
             self.assertFalse(writer_entered.is_set(), "Writer should still be waiting while the reserved reader is active.")
 

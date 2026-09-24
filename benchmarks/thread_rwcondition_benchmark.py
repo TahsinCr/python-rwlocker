@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import threading
 import queue
 import time
@@ -53,6 +55,9 @@ class RWConditionFairWrapper:
 
 
 class ThreadConditionBenchmarker(BenchmarkerBase):
+    def _operation_count(self, scenario: BaseScenario, num_readers: int, num_writers: int) -> int:
+        return num_readers * scenario.iterations * num_writers + num_writers * scenario.iterations
+
     def _reader_worker(
         self, 
         cond:RWConditionBase, 
@@ -69,8 +74,8 @@ class ThreadConditionBenchmarker(BenchmarkerBase):
             while expected <= target_epoch:
                 with cond.read:
                     cond.read.wait_for(lambda: scenario.epoch >= expected)
-                    expected = scenario.epoch + 1 
                     scenario.execute_read(worker_id)
+                    expected += 1
         except BaseException as exc:
             errors.put(exc)
 

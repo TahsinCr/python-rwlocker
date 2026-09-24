@@ -27,13 +27,14 @@ class AuthTokenManager:
                 
             return self._token
 
-    def invalidate_token(self) -> None:
+    async def invalidate_token(self) -> None:
         """Can be triggered by a 401 Unauthorized interceptor."""
-        self._is_expired = True
+        async with self._lock.write:
+            self._is_expired = True
 
 async def main():
     manager = AuthTokenManager()
-    manager.invalidate_token() # Force expiration
+    await manager.invalidate_token() # Force expiration
 
     async def worker(task_id: int):
         print(f"Task {task_id} requesting token...")

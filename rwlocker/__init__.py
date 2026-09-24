@@ -1,67 +1,52 @@
-"""
-Advanced Read-Write Lock (RWLock) and Condition Concurrency Primitives.
+"""Synchronous and asyncio read-write locks and condition variables.
 
-This package provides a comprehensive, highly optimized, state-machine-based 
-suite of Read-Write locks and Condition variables for both Synchronous 
-(`threading`) and Asynchronous (`asyncio`) Python applications. 
-
-Designed for high-performance systems (e.g., telemetry processing, data streams), 
-it guarantees strict data safety while maximizing read concurrency and 
-preventing CPU/Event-Loop bottlenecks.
-
-Key Architectural Features:
-    - **Multiple Scheduling Strategies**: Choose between Write-preferring,
-      Read-preferring, Reader-Phase Fair, and Strict Fair algorithms to prevent
-      starvation based on your specific workload.
-    - **O(1) Condition Queuing (Stampede Protection)**: Condition variables 
-      (`RWCondition`, `AsyncRWCondition`) utilize pure O(1) waiter queues 
-      to completely eliminate O(N) cache stampedes and event-loop blocking 
-      during massive `notify_all()` calls.
-    - **Smart Proxies**: Locks and conditions are interacted with via `.read` 
-      and `.write` attributes. These proxies intelligently route `release()` 
-      operations, even after complex state transitions, preventing deadlocks.
-    - **Atomic Downgrading**: Transition from a Write lock to a Read lock seamlessly. 
-      The `.downgrade()` operation ensures no other writer can hijack the lock 
-      during the transition.
-    - **Adapter Pattern & Solid Base**: Standard locks and conditions are 
-      encapsulated via `Lock`, `Condition`, `AsyncLock`, and `AsyncCondition` 
-      adapters, sharing the exact same API signatures for seamless dependency injection.
-    - **Zero-Allocation Fast-Paths**: Standard synchronous lock acquisition 
-      and release are optimized to avoid runtime object creation.
-    - **Flawless Cancellation Shielding (Async)**: Asynchronous locks and 
-      condition `wait()` operations are strictly resilient to `asyncio.CancelledError`, 
-      ensuring safe state recovery during task aborts.
-
-Important Usage Notes & Gotchas:
-    - **Reentrancy (`ReentrantWriter` variants)**: Reentrancy is STRICTLY supported for 
-      nested *write* operations by the same Thread/Task. It does NOT implicitly 
-      grant read locks. You must use `.downgrade()` if you need to read.
-    - **Downgrade Performance Cost**: Calling `.downgrade()` stores a single
-      downgrade-owner marker so the subsequent `release()` can safely route to
-      the read side. Standard fast paths remain allocation-free.
-    - **Circular References**: Base lock classes hold references to their proxies, 
-      and proxies hold references back to the base. Memory is reclaimed via 
-      Python's cyclic GC. Do not rely on `__del__` for cleanup.
-
-Basic Example:
-    >>> lock = RWLockWriteReentrantWriter()
-    >>> with lock.write:
-    ...     # Exclusive write access
-    ...     lock.write.downgrade()
-    ...     # Atomically downgraded to shared read access
-    
-    >>> cond = RWCondition(RWLockWrite())
-    >>> with cond.read:
-    ...     # Sleep at O(1) cost without blocking other readers
-    ...     cond.read.wait_for(lambda: True)
-
-    >>> async_cond = AsyncRWCondition(AsyncRWLockRead())
-    >>> async with async_cond.write:
-    ...     # Wake up thousands of tasks instantly without event-loop lag
-    ...     async_cond.write.notify_all()
+Runtime-specific modules are loaded on first access so thread-only and
+async-only imports do not eagerly initialize the other implementation.
+Direct operations on a read-write lock use its exclusive write proxy; shared
+access is available through ``.read`` and exclusive access through ``.write``.
 """
 
-from .thread_rwlock import *
-from .async_rwlock import *
+from importlib import import_module
 
-__version__ = '3.3'
+__version__ = "3.4"
+
+_THREAD_EXPORTS = (
+    "Lockable", "LockDowngradable", "RWLockBase", "RWLockWithProxyBase",
+    "RWLockProxy", "RWLockReaderProxy", "RWLockWriterProxy", "RWLockWrite",
+    "RWLockWriteReentrantWriter", "RWLockRead", "RWLockReadReentrantWriter",
+    "RWLockReaderPhaseFair", "RWLockReaderPhaseFairReentrantWriter", "RWLockFair",
+    "RWLockFairReentrantWriter", "Lock", "ConditionLockable",
+    "ConditionDowngradable", "RWConditionBase", "RWConditionWithProxyBase",
+    "RWConditionProxy", "RWConditionReaderProxy", "RWConditionWriterProxy",
+    "RWCondition", "Condition",
+)
+
+_ASYNC_EXPORTS = (
+    "AsyncLockable", "AsyncLockDowngradable", "AsyncRWLockBase",
+    "AsyncRWLockWithProxyBase", "AsyncRWLockProxy", "AsyncRWLockReaderProxy",
+    "AsyncRWLockWriterProxy", "AsyncRWLockWrite", "AsyncRWLockWriteReentrantWriter",
+    "AsyncRWLockRead", "AsyncRWLockReadReentrantWriter", "AsyncRWLockReaderPhaseFair",
+    "AsyncRWLockReaderPhaseFairReentrantWriter", "AsyncRWLockFair",
+    "AsyncRWLockFairReentrantWriter", "AsyncLock", "AsyncConditionLockable",
+    "AsyncConditionDowngradable", "AsyncRWConditionBase", "AsyncRWConditionWithProxyBase",
+    "AsyncRWConditionProxy", "AsyncRWConditionReaderProxy", "AsyncRWConditionWriterProxy",
+    "AsyncRWCondition", "AsyncCondition",
+)
+
+__all__ = _THREAD_EXPORTS + _ASYNC_EXPORTS
+
+
+def __getattr__(name: str):
+    if name in _THREAD_EXPORTS:
+        module_name = ".thread_rwlock"
+    elif name in _ASYNC_EXPORTS:
+        module_name = ".async_rwlock"
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

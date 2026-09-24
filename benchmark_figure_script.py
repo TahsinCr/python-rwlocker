@@ -13,23 +13,26 @@ except ImportError:
     print("Please install them using: pip install pandas seaborn matplotlib")
     sys.exit(1)
 
-environments = [
-    {
-        "name": "3.14.3_standard",
-        "executable": "/bin/python3.14",
-        "env_vars": {}
-    },
-    {
-        "name": "3.14.3t_gil_on",
-        "executable": "~/.pyenv/versions/3.14.3t/bin/python",
-        "env_vars": {"PYTHON_GIL": "1"}
-    },
-    {
-        "name": "3.14.3t_gil_off",
-        "executable": "~/.pyenv/versions/3.14.3t/bin/python",
-        "env_vars": {"PYTHON_GIL": "0"}
-    }
-]
+standard_python = os.environ.get("RWLOCKER_PYTHON_STANDARD", sys.executable)
+free_threaded_python = os.environ.get("RWLOCKER_PYTHON_FREE_THREADED")
+environments = [{
+    "name": f"{Path(standard_python).name}_standard",
+    "executable": standard_python,
+    "env_vars": {},
+}]
+if free_threaded_python:
+    environments.extend([
+        {
+            "name": f"{Path(free_threaded_python).name}_gil_on",
+            "executable": free_threaded_python,
+            "env_vars": {"PYTHON_GIL": "1"},
+        },
+        {
+            "name": f"{Path(free_threaded_python).name}_gil_off",
+            "executable": free_threaded_python,
+            "env_vars": {"PYTHON_GIL": "0"},
+        },
+    ])
 
 class BenchmarkOrchestrator:
     """
@@ -83,7 +86,7 @@ class BenchmarkPlotter:
         "axes.labelcolor": "#9ca3af",
         "xtick.color": "#9ca3af",
         "ytick.color": "#9ca3af",
-        "font.family": "sans-serif",
+        "font.family": "DejaVu Sans",
         "hatch.linewidth": 2.0
     }
     _SYNC_ENV_PALETTE = ["#3b82f6", "#10b981", "#ef4444"]
@@ -158,10 +161,9 @@ class BenchmarkPlotter:
                 if not mask.any():
                     continue
                 
-                # Find the baseline time for this group (Standard Python is preferred)
-                baseline_mask = mask & (df["Environment"] == "Standard\nPython") & df["Name"].str.contains("Baseline")
-                if not baseline_mask.any():
-                    baseline_mask = mask & df["Name"].str.contains("Baseline")
+                # Compare implementations within the same interpreter environment.
+                environment = df.loc[mask, "Environment"].iloc[0]
+                baseline_mask = mask & (df["Environment"] == environment) & df["Name"].str.contains("Baseline")
                     
                 if baseline_mask.any():
                     baseline_time = df.loc[baseline_mask, "Elapsed"].values[0]
@@ -226,11 +228,11 @@ class BenchmarkPlotter:
             
             ax.tick_params(axis='y', labelsize=17)
             for label in ax.get_yticklabels():
-                label.set_fontweight("600")
+                label.set_fontweight("bold")
                 
             ax.tick_params(axis='x', labelsize=15)
             for label in ax.get_xticklabels():
-                label.set_fontweight("600")
+                label.set_fontweight("bold")
 
     def _create_plot(self, df: pd.DataFrame, x: str, y: str, hue: str, filename: str, palette: list, height: float, aspect: float):
         """Creates, annotates, and saves a single figure."""
@@ -285,7 +287,7 @@ class BenchmarkPlotter:
         )
         
         # --- Styling and Annotation ---
-        g.set_axis_labels("Throughput (Ops/sec) ➔", "", fontsize=18, fontweight="bold")
+        g.set_axis_labels("Throughput (Ops/sec)", "", fontsize=18, fontweight="bold")
         g.set_titles("{col_name}")
         for ax in g.axes.flat:
             title = ax.get_title()
@@ -303,6 +305,8 @@ class BenchmarkPlotter:
         # --- Saving ---
         out_path = self.base_dir.joinpath(filename)
         g.savefig(out_path, format="svg", bbox_inches="tight", transparent=True)
+        svg_lines = out_path.read_text(encoding="utf-8").splitlines()
+        out_path.write_text("\n".join(line.rstrip() for line in svg_lines) + "\n", encoding="utf-8")
         plt.close(g.fig)
         print(f"Exported plot: {out_path}")
 
@@ -314,23 +318,20 @@ class BenchmarkPlotter:
             
         print("Generating Seaborn SVG plots...")
         
-        # --- Async Plots (run on best performing environment) ---
+        # --- Async plots show every available interpreter environment. ---
         async_df = self.df[self.df["Category"].str.startswith("Async")]
         if not async_df.empty:
-            best_env = async_df.groupby("Environment")["Throughput"].mean().idxmax()
-            print(f"Using '{best_env.replace(chr(10), ' ')}' as the reference for async plots.")
-            
             plot_configs_async = [
                 {"category": "AsyncLock", "filename": "async_rwlock.svg", "palette_name": "crest", "height": 9.0, "aspect": 11.0/9.0},
                 {"category": "AsyncCond", "filename": "async_rwcondition.svg", "palette_name": "flare", "height": 5.5, "aspect": 11.0/5.5},
             ]
             
             for config in plot_configs_async:
-                df_plot = async_df[(async_df["Environment"] == best_env) & (async_df["Category"] == config["category"])]
+                df_plot = async_df[async_df["Category"] == config["category"]].copy()
                 if df_plot.empty: continue
                 
-                palette = sns.color_palette(config["palette_name"], n_colors=len(df_plot["Name"].unique()))
-                self._create_plot(df_plot, x="Throughput", y="Name", hue="Name", filename=config["filename"], 
+                palette = self._SYNC_ENV_PALETTE
+                self._create_plot(df_plot, x="Throughput", y="Name", hue="Environment", filename=config["filename"],
                                   palette=palette, height=config["height"], aspect=config["aspect"])
 
         # --- Sync Plots (compare across all environments) ---
@@ -343,7 +344,7 @@ class BenchmarkPlotter:
             df_plot = self.df[self.df["Category"] == config["category"]]
             if df_plot.empty: continue
             
-            self._create_plot(df_plot, x="Throughput", y="Name", hue="Environment", filename=config["filename"], 
+            self._create_plot(df_plot, x="Throughput", y="Name", hue="Environment", filename=config["filename"],
                               palette=self._SYNC_ENV_PALETTE, height=config["height"], aspect=config["aspect"])
 
 

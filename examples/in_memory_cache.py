@@ -16,9 +16,10 @@ class InMemoryCache:
         Readers NEVER block other readers, maximizing throughput.
         """
         with self._lock.read:
-            # Simulate slight I/O or serialization overhead
-            time.sleep(0.001) 
-            return self._cache.get(key)
+            value = self._cache.get(key)
+        # Keep simulated latency outside the lock.
+        time.sleep(0.001)
+        return value
 
     def set(self, key: str, value: Any) -> None:
         """

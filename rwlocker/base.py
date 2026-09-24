@@ -105,11 +105,10 @@ class AsyncFuturable(Protocol):
 # bases
 class RWLockBase(ABC):
     """
-    Absolute base class establishing the core Read-Write interface.
+    Base class establishing the core Read-Write interface.
     
     Provides the foundational `.read` and `.write` attributes. Furthermore, it 
-    acts as a drop-in replacement for `threading.Lock` by exposing standard lock 
-    methods (`acquire`, `release`, etc.) that default to the exclusive `.write` 
+    exposes lock-style methods (`acquire`, `release`, etc.) that default to the exclusive `.write`.
     proxy. Designed to act as a common type hint and contract for both standard 
     adapters and proxy-based complex state machines.
     """
@@ -120,10 +119,10 @@ class RWLockBase(ABC):
         self.write:Lockable = self._lock
     
     def _is_write_locked(self) -> bool:
-        return self.read.locked()
+        return self.write.locked()
 
     def _is_read_locked(self) -> bool:
-        return self.write.locked()
+        return self.read.locked()
     
     def acquire(self, blocking: bool = True, timeout: float = -1.0) -> bool:
         """
@@ -152,14 +151,13 @@ class RWLockBase(ABC):
 
 class AsyncRWLockBase(ABC):
     """
-    Absolute base class establishing the core Asynchronous Read-Write interface.
+    Base class establishing the core Asynchronous Read-Write interface.
     
     Provides the foundational `.read` and `.write` attributes. Furthermore, it 
-    acts as a drop-in replacement for `asyncio.Lock` by exposing standard async 
-    methods (`acquire`, `release`, etc.) that default to the exclusive `.write` 
+    exposes lock-style methods (`acquire`, `release`, etc.) that default to the exclusive `.write`.
     proxy. Designed to act as a common type hint and contract.
     """
-    __slots__ = ('_lock', 'read', 'write')
+    __slots__ = ('read', 'write')
     def __init__(self, lock: AsyncLockable):
         self.read: AsyncLockable = lock
         self.write: AsyncLockable = lock
@@ -197,11 +195,10 @@ class AsyncRWLockBase(ABC):
 
 class RWConditionBase(ABC):
     """
-    Absolute base class establishing the core Read-Write Condition interface.
+    Base class establishing the core Read-Write Condition interface.
     
     Provides the foundational `.read` and `.write` attributes. Furthermore, it 
-    acts as a drop-in replacement for `threading.Condition` by exposing standard 
-    condition methods (`wait`, `notify`, etc.) that default to the exclusive 
+    exposes condition-style methods (`wait`, `notify`, etc.) that default to the exclusive
     `.write` proxy. Designed to act as a common type hint and contract.
     """
     __slots__ = ('_lock', 'read', 'write')
@@ -264,11 +261,10 @@ class RWConditionBase(ABC):
 
 class AsyncRWConditionBase(ABC):
     """
-    Absolute base class establishing the core Asynchronous Read-Write Condition interface.
+    Base class establishing the core Asynchronous Read-Write Condition interface.
     
     Provides the foundational `.read` and `.write` attributes. Furthermore, it 
-    acts as a drop-in replacement for `asyncio.Condition` by exposing standard 
-    condition methods (`wait`, `notify`, etc.) that default to the exclusive 
+    exposes condition-style methods (`wait`, `notify`, etc.) that default to the exclusive
     `.write` proxy. Designed to act as a common type hint and contract.
     """
     __slots__ = ('_lock', 'read', 'write')

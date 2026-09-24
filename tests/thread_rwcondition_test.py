@@ -18,18 +18,41 @@ class BaseConditionTests:
             self.lock = self.lock_class()
             self.condition = Condition(self.lock)
 
-    def _wait_for_condition_waiters(self, expected: int, fallback_delay: float = 0.2, timeout: float = 2.0) -> None:
-        if not hasattr(self.condition, '_waiters') or not hasattr(self.condition, '_internal_lock'):
-            time.sleep(fallback_delay)
-            return
+    def _is_locked(self, proxy):
+        locked = getattr(proxy, "locked", None)
+        if locked is not None:
+            return locked()
+        lock = getattr(proxy, "_lock", proxy)
+        locked = getattr(lock, "locked", None)
+        if locked is not None:
+            return locked()
+        is_owned = getattr(lock, "_is_owned", None)
+        if is_owned is not None:
+            return is_owned()
+        acquired = lock.acquire(blocking=False)
+        if acquired:
+            lock.release()
+        return not acquired
 
+    def _wait_for_condition_waiters(self, expected: int, fallback_delay: float = 0.2, timeout: float = 2.0) -> None:
+        del fallback_delay
+        queue = getattr(self.condition, "_queue", None)
+        if queue is not None:
+            waiters = queue._waiters
+            internal_lock = queue._lock
+        else:
+            condition = self.condition.write
+            waiters = getattr(condition, "_waiters", None)
+            internal_lock = getattr(condition, "_lock", None)
+            if waiters is None or internal_lock is None:
+                self.fail("The Condition waiter state is unavailable for synchronization")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            with self.condition._internal_lock:
-                if len(self.condition._waiters) >= expected:
+            with internal_lock:
+                if len(waiters) >= expected:
                     return
             time.sleep(0.005)
-        time.sleep(0.05)
+        self.fail(f"Expected {expected} Condition waiters to be queued")
 
     def _join_threads_or_fail(self, threads: list[threading.Thread], timeout: float, context: str) -> None:
         deadline = time.monotonic() + timeout
@@ -44,8 +67,8 @@ class BaseConditionTests:
             self.fail(f"{context} did not finish in time. Still alive: {', '.join(stuck)}")
 
     def test_initial_state(self):
-        self.assertFalse(self.condition.read.locked())
-        self.assertFalse(self.condition.write.locked())
+        self.assertFalse(self._is_locked(self.condition.read))
+        self.assertFalse(self._is_locked(self.condition.write))
 
     def test_wait_without_acquire_raises(self):
         with self.assertRaises(RuntimeError, msg="Waiting on an un-acquired read condition should raise RuntimeError."):
@@ -75,8 +98,7 @@ class BaseConditionTests:
         t = threading.Thread(target=waiter_thread)
         t.start()
         
-        # Ensure the waiter thread has time to enter the wait state
-        time.sleep(0.1)
+        self._wait_for_condition_waiters(1)
 
         with self.condition.write:
             event_happened = True
@@ -114,6 +136,7 @@ class BaseConditionTests:
     def test_notify_n_wakes_specific_number_of_waiters(self):
         wait_count = 0
         lock = threading.Lock()
+        two_woken = threading.Event()
 
         def waiter_thread():
             nonlocal wait_count
@@ -121,6 +144,8 @@ class BaseConditionTests:
                 self.condition.read.wait()
                 with lock:
                     wait_count += 1
+                    if wait_count == 2:
+                        two_woken.set()
 
         threads = [threading.Thread(target=waiter_thread) for _ in range(4)]
         for t in threads:
@@ -132,7 +157,7 @@ class BaseConditionTests:
             # Wake exactly 2 threads out of 4
             self.condition.write.notify(n=2)
 
-        time.sleep(0.1)
+        self.assertTrue(two_woken.wait(1.0), "Two notified threads should finish before the cleanup broadcast.")
         
         # Since we woke 2 threads, they should complete. 
         # The other 2 are still waiting. We must wake them up to exit cleanly.
@@ -209,8 +234,8 @@ class RWConditionTests(BaseConditionTests):
             # Releasing the Write proxy must NOT raise RuntimeError now.
             # The Smart Proxy must route it to the Read release core.
         
-        self.assertFalse(self.condition.read.locked())
-        self.assertFalse(self.condition.write.locked())
+        self.assertFalse(self._is_locked(self.condition.read))
+        self.assertFalse(self._is_locked(self.condition.write))
 
 
 

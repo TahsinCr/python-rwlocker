@@ -96,13 +96,14 @@ class CPUBoundScenario(BaseScenario):
 class AsyncCPUBoundScenario(CPUBoundScenario):
     """
     Simulates a Real-World CPU-Bound Data Processing Task.
-    In Free-Threading (No-GIL) Python, this achieves TRUE PARALLELISM across all cores.
+    Runs CPU work in the default executor so the event loop remains responsive.
+    Multiple workers can run in parallel on free-threaded Python builds.
     """
     async def execute_read(self, worker_id: int):
-        super().execute_read(worker_id)
+        await asyncio.to_thread(super().execute_read, worker_id)
 
     async def execute_write(self, worker_id: int):
-        super().execute_write(worker_id)
+        await asyncio.to_thread(super().execute_write, worker_id)
 
 
 

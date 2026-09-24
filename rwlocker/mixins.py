@@ -19,10 +19,10 @@ class _RWLockWriteMixin:
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
         self._readers_active += 1
+        self._record_reader_acquire()
 
     def _release_read_core(self) -> None:
-        if self._readers_active == 0:
-            raise RuntimeError("Unacquired read lock")
+        self._record_reader_release()
         self._readers_active -= 1
         if self._readers_active == 0 and self.write.condition.has_waiters():
             self.write.condition.notify()
@@ -37,18 +37,22 @@ class _RWLockWriteMixin:
     def _acquire_write_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
         self._writer_active = True
+        self._writer_owner = self._current_reader_owner()
 
     def _release_write_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Unacquired write lock")
         self._writer_active = False
+        self._writer_owner = None
         self._on_writer_abort()
 
     def _downgrade_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Cannot downgrade unlocked lock")
         self._writer_active = False
+        self._writer_owner = None
         self._readers_active += 1
+        self._record_reader_acquire()
         if self.read.condition.has_waiters():
             self.read.condition.notify_all()
 
@@ -77,10 +81,10 @@ class _RWLockReadMixin:
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
         self._readers_active += 1
+        self._record_reader_acquire()
 
     def _release_read_core(self) -> None:
-        if self._readers_active == 0:
-            raise RuntimeError("Unacquired read lock")
+        self._record_reader_release()
         self._readers_active -= 1
         if self._readers_active == 0 and self.write.condition.has_waiters():
             self.write.condition.notify()
@@ -101,18 +105,22 @@ class _RWLockReadMixin:
     def _acquire_write_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
         self._writer_active = True
+        self._writer_owner = self._current_reader_owner()
 
     def _release_write_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Unacquired write lock")
         self._writer_active = False
+        self._writer_owner = None
         self._on_writer_abort()
 
     def _downgrade_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Cannot downgrade unlocked lock")
         self._writer_active = False
+        self._writer_owner = None
         self._readers_active += 1
+        self._record_reader_acquire()
         if self.read.condition.has_waiters():
             self.read.condition.notify_all()
 
@@ -163,12 +171,12 @@ class _RWLockReaderPhaseFairMixin:
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
         self._readers_active += 1
+        self._record_reader_acquire()
         if self._readers_turn and self.read.those_waiting > 0:
             self._wake_waiting_reader()
 
     def _release_read_core(self) -> None:
-        if self._readers_active == 0:
-            raise RuntimeError("Unacquired read lock")
+        self._record_reader_release()
         self._readers_active -= 1
         if self._readers_active == 0:
             self._finish_or_continue_reader_phase()
@@ -189,18 +197,22 @@ class _RWLockReaderPhaseFairMixin:
     def _acquire_write_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
         self._writer_active = True
+        self._writer_owner = self._current_reader_owner()
 
     def _release_write_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Unacquired write lock")
         self._writer_active = False
+        self._writer_owner = None
         self._on_writer_abort()
 
     def _downgrade_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Cannot downgrade unlocked lock")
         self._writer_active = False
+        self._writer_owner = None
         self._readers_active += 1
+        self._record_reader_acquire()
         self._start_reader_phase()
 
     def _on_writer_abort(self, waiter_seq: Optional[int] = None) -> None:
@@ -271,6 +283,7 @@ class _RWLockFairMixin:
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         self._consume_reader_phase_slot(waiting, waiter_seq)
         self._readers_active += 1
+        self._record_reader_acquire()
         if self._readers_turn and self._reader_phase_pending > 0:
             self._wake_waiting_reader()
 
@@ -322,6 +335,7 @@ class _RWLockReentrantWriterCoreMixin:
         self._clear_current_writer()
         self._write_count = 0
         self._readers_active += 1
+        self._record_reader_acquire()
         if self.read.condition.has_waiters():
             self.read.condition.notify_all()
 
@@ -333,6 +347,7 @@ class _RWLockReentrantWriterCoreMixin:
         self._clear_current_writer()
         self._write_count = 0
         self._readers_active += 1
+        self._record_reader_acquire()
         self._start_reader_phase()
 
 class _RWLockWriteReentrantWriterMixin(_RWLockReentrantWriterCoreMixin):
@@ -433,10 +448,12 @@ class _RWConditionMixin:
     __slots__ = ()
 
     def _is_owned_read(self) -> bool:
-        return self._lock._is_read_locked()
+        is_owned = getattr(self._lock, "_is_current_reader", None)
+        return is_owned() if is_owned is not None else self._lock._is_read_locked()
 
     def _is_owned_write(self) -> bool:
-        return self._lock._is_write_locked()
+        is_owned = getattr(self._lock, "_is_current_writer", None)
+        return is_owned() if is_owned is not None else self._lock._is_write_locked()
 
     def _add_waiter(self):
         return self._queue.add_waiter()

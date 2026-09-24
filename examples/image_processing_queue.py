@@ -25,13 +25,11 @@ class ImageProcessingQueue:
 
     def consume_job(self, worker_name: str) -> None:
         """Consumer: Waits for a job and processes it."""
-        with self._cond.read:
+        with self._cond.write:
             # Wait safely until the queue is not empty
-            self._cond.read.wait_for(lambda: len(self._queue) > 0)
+            self._cond.write.wait_for(lambda: len(self._queue) > 0)
             
-            # Pop the job quickly while holding the read lock
-            # (Note: In pure RW semantics, deque pop is a write. For this example, 
-            # we assume the queue is read-popped atomically via GIL deque properties)
+            # Removing a job mutates the queue, so it requires exclusive access.
             try:
                 job = self._queue.popleft()
             except IndexError:
@@ -58,7 +56,10 @@ if __name__ == "__main__":
     job_queue.add_jobs(["img_01.jpg", "img_02.png"])
     time.sleep(0.5)
 
-    # Add the remaining jobs to finish the workers
-    job_queue.add_jobs(["img_03.webp", "img_04.jpg", "img_05.bmp"])
+    # Add the remaining jobs required by the four workers (two each).
+    job_queue.add_jobs([
+        "img_03.webp", "img_04.jpg", "img_05.bmp",
+        "img_06.tif", "img_07.gif", "img_08.png",
+    ])
 
     for t in threads: t.join()

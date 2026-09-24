@@ -1,6 +1,39 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
+## **[3.4] - 24.09.2026**
+The **"Correctness, Packaging & Benchmark Reporting"** update. This release fixes ownership and injected-lock handling, improves Python-version and package metadata, makes benchmark collection reproducible and more informative, repairs examples, and revises documentation to describe measured behavior accurately.
+
+### Fixed
+* **Python Compatibility and Lock Construction**:
+    * Deferred forward-reference annotations in the synchronous and asynchronous modules so supported Python versions can import the package.
+    * Forwarded supplied lock objects through every synchronous RWLock constructor instead of silently replacing them.
+    * Track read ownership and reject unmatched or cross-owner read releases; condition ownership checks use the current thread/task where that information is available.
+* **Examples and Concurrency Edge Cases**:
+    * Fixed invalidation races in the auth-token example and corrected cleanup/error handling in the image queue, transaction ledger, and synchronous ledger condition examples.
+    * Made the global configuration cache and remaining examples consistent with the lock and condition APIs.
+    * Corrected async CPU-bound benchmark scenarios to run CPU work outside the event loop.
+
+### Updated
+* **Benchmark Reliability**:
+    * Added configurable interactive and reporting profiles; reporting collection now defaults to 10 measured trials after 2 warmups.
+    * Store individual trial durations, variance, median absolute deviation, quartiles, and a deterministic bootstrap 95% confidence interval with collected results.
+    * Calculate condition operation counts from actual reader and writer work, and label workload throughput separately from primitive or notification cost.
+    * Plot all collected async interpreter environments and compare synchronous results within their matching interpreter environment.
+* **Package and CI**:
+    * Declare Python 3.9–3.14 in the CI matrix and add a package import check.
+    * Include `py.typed` in built distributions and declare plotting dependencies under the optional `benchmark` extra; the runtime package remains dependency-free.
+    * Mark the project as Beta while supported-version and concurrency behavior continue to receive CI coverage.
+* **Documentation and Historical Corrections**:
+    * Describe condition queue operations accurately: enqueue/FIFO dequeue are amortized O(1), while broadcast and arbitrary waiter removal are O(N).
+    * Clarify that lock-style compatibility is not universal drop-in compatibility, fairness outcomes depend on workload, and benchmark ratios describe end-to-end workloads.
+    * Remove absolute correctness, zero-error, and zero-overhead claims; document writer reentrancy and benchmark limitations consistently across English, Turkish, Russian, and PyPI READMEs.
+    * Note that previously published aggregate benchmark JSON files do not contain raw per-trial data and cannot be retroactively expanded.
+
+### Validation
+* The local suite passed 435 tests on Python 3.10 and Python 3.14; Python 3.9 is covered by CI configuration but was not available for local execution.
+* Benchmark figures were regenerated from the available interpreter datasets. CI results on remote runners and package publication are separate release steps and are not claimed here.
+
 ## **[3.3] - 04.04.2026**
 The **"Fairness, Protocol Isolation & Benchmark Reliability"** update. This version re-introduces carefully scoped internal mixins without changing the public monolithic API, formalizes the distinction between Reader-Phase Fair and Strict Fair scheduling, isolates protocol and queue infrastructure to reduce cross-runtime import cost, hardens downgrade routing in both Thread and Async implementations, and substantially upgrades the benchmark/reporting toolchain and documentation surface.
 
@@ -111,7 +144,7 @@ The **"Fairness, Protocol Isolation & Benchmark Reliability"** update. This vers
 <br>
 
 ## **[3.2] - 22.03.2026**
-The **"Absolute Speed & Memory Safety"** update. This version strictly prioritizes raw execution speed by reversing the DRY-oriented mixin architecture, introduces O(1) memory optimizations for thread state downgrades, completely eliminates a critical memory leak in async task tracking via weak references, and refines type hinting for standard adapters.
+The **"Speed and Memory Safety"** update. This version strictly prioritizes raw execution speed by reversing the DRY-oriented mixin architecture, introduces O(1) memory optimizations for thread state downgrades, completely eliminates a critical memory leak in async task tracking via weak references, and refines type hinting for standard adapters.
 
 ### Updated
 * **Removal of State-Machine Mixins (`mixins.py`)**:
@@ -172,21 +205,21 @@ The **"Micro-Optimizations & Memory Safety"** update. This version introduces ta
 ### Fixed
 * **Critical Memory Leak in Async Wait Queues**:
     * Fixed a bug in `_AsyncWaitQueue.notify_all()` that left completed `asyncio.Future` objects lingering in memory.
-    * Added a strict `waiters.clear()` step after broadcasting. This completely stops O(N) performance slowdowns and prevents memory usage from infinitely ballooning when `notify_all()` is called frequently.
+    * Queue cleanup releases references to signalled waiters. Broadcasting still signals each waiter and takes O(N) time.
 
 <br>
 
 ## **[3.0] - 04.03.2026**
-The **"Zero Friction & Drop-in Replacement"** update. This version marks a major architectural leap by bypassing internal library overheads, introducing true O(1) broadcast clearing, and achieving 100% API parity with Python's standard concurrency primitives.
+The **"Lock-Style Interface and Queue-Based Conditions"** update. This version added direct lock-style methods and internal queues. Its original complexity and API-parity claims were overstated; see the Unreleased corrections above.
 
 ### Added
-* **High-Performance Micro-Queues (`_ThreadWaitQueue`, `_AsyncWaitQueue`)**:
-    * Replaced heavy standard `threading.Condition` and `asyncio.Condition` internals with lean, custom-built O(1) wait queues.
+* **Wait Queues (`_ThreadWaitQueue`, `_AsyncWaitQueue`)**:
+    * Replaced standard `threading.Condition` and `asyncio.Condition` wait handling with internal queues. Enqueue and FIFO dequeue are amortized O(1); broadcasting and arbitrary waiter removal are O(N).
     * These queues operate directly under the parent lock’s protection, eliminating nested lock overhead and minimizing OS-level context switching.
-* **100% Drop-in Replacement Architecture**:
-    * `RWLockBase`, `RWConditionBase`, `AsyncRWLockBase`, and `AsyncRWConditionBase` now natively implement the complete standard `Lockable` and `ConditionLockable` (and their async counterparts) protocols directly.
+* **Lock-Style Interface Compatibility**:
+    * `RWLockBase`, `RWConditionBase`, `AsyncRWLockBase`, and `AsyncRWConditionBase` now expose direct lock-style methods alongside `.read` and `.write` proxies; signatures and observable behavior do not fully match every standard primitive.
     * Calling standard methods directly on the core object (e.g., `lock.acquire()`, `await cond.wait()`, `__enter__`, `__aenter__`) now automatically and safely routes to the exclusive `.write` proxy.
-    * This allows custom locks (Fair, Read-Pref, Write-Pref) to be seamlessly passed into third-party libraries (e.g., SQLAlchemy, requests) expecting standard `threading.Lock` or `asyncio.Lock` instances.
+    * Check each integration before passing a custom lock to code written for standard `threading.Lock` or `asyncio.Lock` instances.
 * **Standard Adapters (`Lock`, `Condition`, `AsyncLock`, `AsyncCondition`)**:
     * Added specific adapter classes that encapsulate standard `threading` and `asyncio` primitives while conforming strictly to the `RWLockBase` API signature (`.read` and `.write` attributes). Ideal for dependency injection workflows.
 
@@ -195,47 +228,47 @@ The **"Zero Friction & Drop-in Replacement"** update. This version marks a major
     * Renamed all `FIFO` scheduling classes to `Fair` (e.g., `RWLockFIFO` -> `RWLockFair`, `AsyncRWLockFIFO` -> `AsyncRWLockFair` and their Reentrant variants) to better align with standard computer science terminology for phase-ordered, starvation-free scheduling.
 * **"Happy Path" Performance Isolation (Thread & Async)**:
     * Re-engineered the wait logic in both environments to completely skip O(N) `remove()` operations upon successful wake-ups.
-    * **Async Environment:** `_AsyncWaitQueue.wait()` and `AsyncRWConditionProxy.wait()` now utilize `except asyncio.CancelledError` for cleanup, ensuring zero execution cost on successful executions.
+    * **Async Environment:** `_AsyncWaitQueue.wait()` and `AsyncRWConditionProxy.wait()` now utilize `except asyncio.CancelledError` for cleanup, avoiding arbitrary waiter removal on successful wake-ups.
     * **Thread Environment:** `_ThreadWaitQueue.wait()` implements a strict `gotit` boolean flag, executing the cleanup block `if not gotit` only upon timeouts or external OS interrupts, bypassing list traversal on standard wake-ups.
-* **Pure O(1) Broadcast / Cache Stampede Eradication**:
-    * Upgraded `notify_all()` and `_notify_all_core()` methods across both Thread and Async wait queues (`_ThreadWaitQueue`, `_AsyncWaitQueue`, `RWCondition`, `AsyncRWCondition`).
-    * Replaced the hallowed O(N) `while` loop and `popleft()` element extraction with a high-speed `for` loop iteration followed by a C-level `deque.clear()` operation, resolving CPU locking during massive (100+ tasks/threads) wake-ups.
+* **Condition Broadcasts**:
+    * Updated `notify_all()` across both Thread and Async wait queues (`_ThreadWaitQueue`, `_AsyncWaitQueue`, `RWCondition`, `AsyncRWCondition`).
+    * Each waiter is signalled individually, so `notify_all()` takes O(N) time. FIFO deque operations are amortized O(1), while removing an arbitrary waiter takes O(N).
 * **Dot-Lookup Elimination (Micro-optimization)**:
     * Applied local variable caching (`waiters = self._waiters`) inside highly concurrent loops (`notify`, `notify_all`) to bypass Python Virtual Machine (PVM) attribute lookup overhead.
 * **Documentation**:
     * Appended "Drop-in Replacement" details to the Architecture Notes.
     * Added comprehensive `Example 2 (Drop-in Replacement)` blocks inside docstrings for every single primitive, guiding developers on direct standard API usage.
 * **Adapter Test Suites**: 
-    * Integrated the newly introduced standard adapter classes (`Lock`, `AsyncLock`, `Condition`, `AsyncCondition`) into the testing pipeline to ensure 100% behavioral compliance with the standard Python library.
+    * Integrated the newly introduced standard adapter classes (`Lock`, `AsyncLock`, `Condition`, `AsyncCondition`) into the testing pipeline to check the adapters against their documented lock-style interface.
 
 ### Fixed
 * **Thread Timeout and OS-Interrupt Resilience**:
-    * Hardened the `_ThreadWaitQueue.wait(timeout)` mechanics. Replaced standard exception wrapping with an absolute `finally: self._lock.acquire()` guarantee coupled with the `gotit` flag. This prevents infinite deadlocks even if the Operating System violently interrupts the thread (e.g., `KeyboardInterrupt`) precisely during a timeout expiration.
+    * Hardened the `_ThreadWaitQueue.wait(timeout)` mechanics. Used a `finally` reacquisition path with a `gotit` flag to restore lock state after timeouts or interrupts.
 * **Precise Partial Notifications (`notify_core`)**:
     * Distinctly separated the partial wake-up logic (`notify(n)`) from the broadcast logic (`notify_all`). Ensured `notify(n)` correctly decrements `n` only on successful, non-interrupted, or non-cancelled thread/task wake-ups using `else` blocks and `.done()` validations.
 * **Test Infrastructure Overhaul**: 
     * Completely redesigned and fortified the testing architecture to handle the new drop-in replacement patterns and micro-queue structures. 
-    * The testing suite has been expanded to a massive **266 unit tests**, validating concurrency safety, cancellation shielding, and edge cases, executing flawlessly in a blistering **8.5 seconds**.
+    * The testing suite has been expanded to a massive **266 unit tests**, validating concurrency safety, cancellation shielding, and edge cases, running in **8.5 seconds** in that recorded environment.
 
 <br>
 
 ## **[2.0] - 02.03.2026**
-Add highly optimized **O(1)** `RWCondition` and `AsyncRWCondition` primitives with flawless cancellation shielding. Also rename all `*SafeWriter` classes to `*ReentrantWriter` and expand test coverage for the v2.0 release.
+Add queue-backed `RWCondition` and `AsyncRWCondition` primitives with cancellation cleanup. Also rename all `*SafeWriter` classes to `*ReentrantWriter` and expand test coverage for the v2.0 release.
 
 ### Added
 * **Condition Variables for Thread & Async Environments**:
     * Introduced `RWCondition` (Thread) and `AsyncRWCondition` (Asyncio) primitives.
     * Condition variables can now wrap any specific scheduling strategy (`Write-Pref`, `Read-Pref`, `FIFO`, and `Reentrant` variants) via Dependency Injection.
-    * Standard Condition's O(N) wake-up traversal has been completely bypassed.
-    * `RWCondition` utilizes a `deque` with micro-locks, and `AsyncRWCondition` utilizes a native `deque` of `asyncio.Future` objects to provide **pure O(1) time complexity** for `wait()`, `notify()`, and `notify_all()` operations.
+    * Waiter signalling is handled by the internal FIFO queue; each waiter is still signalled individually.
+    * `RWCondition` utilizes a `deque` with micro-locks, and `AsyncRWCondition` utilizes a native `deque` of `asyncio.Future` objects to provide amortized O(1) FIFO enqueue/dequeue. `notify_all()` and arbitrary waiter removal take O(N).
 * **Condition Smart Proxies & Downgrade Safety**:
     * Implemented `.read` and `.write` proxies for Condition objects (`RWConditionProxy`, `AsyncRWConditionProxy`).
     * The Smart Proxy intelligently routes the release operations back to the correct state even if an **Atomic Downgrade** was performed while holding a lock inside a condition block.
-* **Flawless Cancellation Shielding (Asyncio)**:
-    * Re-engineered the `AsyncRWConditionProxy.wait()` method to be absolutely resilient to `asyncio.CancelledError`. Tasks that are cancelled while sleeping now securely re-acquire the lock before throwing the error to prevent any state corruption.
+* **Cancellation Cleanup (Asyncio)**:
+    * Re-engineered `AsyncRWConditionProxy.wait()` to reacquire the lock before propagating `asyncio.CancelledError` when a waiting task is cancelled.
 * **Advanced Benchmark Suite for Conditions**:
     * Added comprehensive "Cache Stampede Simulators" (`PubSubScenario` & `ReaderWriterConditionScenario`) to measure event loop queuing, task wake-up latency, and stampede protection.
-    * Demonstrated up to **70x FASTER** throughput compared to standard `asyncio.Condition` and `threading.Condition` in (1 Writer, 100 Readers) workloads.
+    * Observed up to **70x** end-to-end workload throughput against standard condition baselines in a (1 Writer, 100 Readers) workload. This compares different lock semantics and does not isolate notification speed.
 * **Expanded Test Coverage**:
     * Test suite expanded from 135 to **252 unit tests**.
     * Added deep validation for state ownership, `notify(n)` precision, lock release safety, and timeout precision on both synchronous and asynchronous Condition proxies.

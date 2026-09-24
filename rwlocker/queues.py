@@ -50,16 +50,11 @@ class WakeQueueBase(ABC, Generic[T]):
                 n -= 1
 
     def _notify_all_unlocked(self) -> None:
-        waiters = self._waiters
-        if not waiters:
-            return
-        for waiter in waiters:
-            self._wake_waiter(waiter)
-        waiters.clear()
+        self._notify_unlocked(len(self._waiters))
 
 
 class ThreadWaitQueue(WakeQueueBase[Lockable]):
-    """O(1) wait queue for proxy-based thread locks."""
+    """FIFO wait queue for proxy-based thread locks."""
     __slots__ = ("_lock", "_waiter_factory")
 
     def __init__(self, lock: Lockable, waiter_factory: Callable[..., Lockable]):
@@ -99,7 +94,7 @@ class ThreadWaitQueue(WakeQueueBase[Lockable]):
         self._notify_all_unlocked()
 
 class AsyncWaitQueue(WakeQueueBase[AsyncFuturable]):
-    """O(1) wait queue for proxy-based asyncio locks."""
+    """FIFO wait queue for proxy-based asyncio locks."""
     __slots__ = ("_waiter_factory",)
 
     def __init__(self, waiter_factory: Callable[..., AsyncFuturable]):
@@ -128,7 +123,7 @@ class AsyncWaitQueue(WakeQueueBase[AsyncFuturable]):
 
 
 class ThreadConditionQueue(WakeQueueBase[Lockable]):
-    """O(1) waiter queue for thread-based RWCondition implementations."""
+    """FIFO waiter queue for thread-based RWCondition implementations."""
     __slots__ = ("_lock", "_waiter_factory")
 
     def __init__(
@@ -170,7 +165,7 @@ class ThreadConditionQueue(WakeQueueBase[Lockable]):
             self._notify_all_unlocked()
 
 class AsyncConditionQueue(WakeQueueBase[AsyncFuturable]):
-    """O(1) waiter queue for asyncio RWCondition implementations."""
+    """FIFO waiter queue for asyncio RWCondition implementations."""
 
     __slots__ = ("_waiter_factory",)
 

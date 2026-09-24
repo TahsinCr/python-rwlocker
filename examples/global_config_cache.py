@@ -14,29 +14,36 @@ class GlobalConfigCache:
         self._is_refreshing = False
 
     async def get_config(self) -> dict:
-        """Called by thousands of concurrent requests."""
+        """Called by concurrent requests."""
         async with self._cond.read:
             # If the config is currently being hard-refreshed, we don't want 
             # 10,000 requests hitting the DB. We make them wait.
             # Using wait_for handles spurious wakeups automatically.
             await self._cond.read.wait_for(lambda: not self._is_refreshing)
-            return self._config
+            return dict(self._config)
 
     async def force_refresh_from_db(self) -> None:
         """Triggered via a webhook when admin changes settings."""
         async with self._cond.write:
+            await self._cond.write.wait_for(lambda: not self._is_refreshing)
             print("\n[DB] Admin updated config. Locking out new readers...")
             self._is_refreshing = True
-            
-            # Simulate slow DB call
-            await asyncio.sleep(0.5) 
-            self._config = {"theme": "dark", "version": self._config_version + 1}
-            self._config_version += 1
-            self._is_refreshing = False
-            
-            print(f"[DB] Config refreshed to v{self._config_version}. Broadcasting to ALL waiting readers...")
-            # O(1) wakeup for potentially thousands of waiting tasks
-            self._cond.write.notify_all()
+
+        try:
+            # Keep slow external I/O outside the lock.
+            await asyncio.sleep(0.5)
+            async with self._cond.write:
+                self._config = {"theme": "dark", "version": self._config_version + 1}
+                self._config_version += 1
+                self._is_refreshing = False
+                self._cond.write.notify_all()
+                print(f"[DB] Config refreshed to v{self._config_version}. Broadcasting to ALL waiting readers...")
+        except BaseException:
+            async with self._cond.write:
+                if self._is_refreshing:
+                    self._is_refreshing = False
+                    self._cond.write.notify_all()
+            raise
 
 async def main():
     cache = GlobalConfigCache()
@@ -46,7 +53,10 @@ async def main():
         cfg = await cache.get_config()
         print(f"Worker {worker_id} got config: {cfg['theme']}")
 
-    # Start 3 workers, they get empty config immediately
+    # Populate the cache before serving readers.
+    await cache.force_refresh_from_db()
+
+    # Start 3 workers with valid config.
     await asyncio.gather(*(worker(i) for i in range(1, 4)))
 
     # Start an update process

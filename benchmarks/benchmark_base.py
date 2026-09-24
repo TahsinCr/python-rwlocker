@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import gc
 import os
 import re
@@ -6,6 +8,8 @@ import sys
 import time
 import threading
 import asyncio
+import statistics
+import random
 from dataclasses import dataclass
 from typing import List, Type
 
@@ -21,6 +25,32 @@ def aggregate(trial_data: List[float]) -> float:
     if len(valid_runs) % 2 == 0 and len(valid_runs) > 1:
         return (valid_runs[mid - 1] + valid_runs[mid]) / 2.0
     return valid_runs[mid]
+
+
+def _benchmark_statistics(trial_data: List[float]) -> dict:
+    values = sorted(trial_data)
+    median = statistics.median(values)
+    deviations = [abs(value - median) for value in values]
+    mean = statistics.mean(values)
+    variance = statistics.variance(values) if len(values) > 1 else 0.0
+    quartiles = statistics.quantiles(values, n=4, method="inclusive") if len(values) > 1 else [values[0]] * 3
+
+    rng = random.Random(0)
+    bootstrap_means = sorted(
+        statistics.mean(rng.choices(values, k=len(values)))
+        for _ in range(2000)
+    ) if len(values) > 1 else [values[0]]
+    low = bootstrap_means[int(0.025 * (len(bootstrap_means) - 1))]
+    high = bootstrap_means[int(0.975 * (len(bootstrap_means) - 1))]
+    return {
+        "trial_elapsed": trial_data,
+        "mean": mean,
+        "variance": variance,
+        "mad": statistics.median(deviations),
+        "p25": quartiles[0],
+        "p75": quartiles[2],
+        "mean_ci95_bootstrap": [low, high],
+    }
 
 
 @dataclass(frozen=True)
@@ -50,7 +80,7 @@ class BenchmarkConfig:
 
     @classmethod
     def reporting(cls) -> "BenchmarkConfig":
-        return cls(trials=5, warmup_trials=1)
+        return cls(trials=10, warmup_trials=2)
 
 
 class BenchmarkDataHandler:
@@ -62,13 +92,14 @@ class BenchmarkDataHandler:
         results.sort(key=lambda x: x[1])
         
         formatted_results = []
-        for target_name, elapsed, throughput in results:
+        for target_name, elapsed, throughput, trial_elapsed in results:
             speedup = (baseline_time / elapsed) if baseline_time else 0.0
             formatted_results.append({
                 "name": target_name,
                 "elapsed": elapsed,
                 "throughput": throughput,
-                "speedup": speedup
+                "speedup": speedup,
+                **_benchmark_statistics(trial_elapsed),
             })
             
         data = {
@@ -76,6 +107,7 @@ class BenchmarkDataHandler:
             "readers": num_readers,
             "writers": num_writers,
             "iterations": iterations,
+            "total_operations": int(round(results[0][2] * results[0][1])) if results else 0,
             "target_type": target_type,
             "baseline_time": baseline_time,
             "results": formatted_results
@@ -242,7 +274,7 @@ class BenchmarkPrintHandler(BenchmarkDataHandler):
         total_width, name_width, time_width, ops_width, speed_width = self._layout(data["target_type"], data["results"])
         divider = "-" * total_width
         best_elapsed = min((res["elapsed"] for res in data["results"]), default=0.0001)
-        total_ops = (data["readers"] + data["writers"]) * data["iterations"]
+        total_ops = data["total_operations"]
 
         print()
         print(self._style(f"[{data['scenario_name'].upper()}]", self._BOLD))
@@ -309,6 +341,9 @@ class BenchmarkerBase:
     def _is_baseline_target(self, target_name: str) -> bool:
         return "(C-Baseline)" in target_name or target_name.startswith("threading.") or target_name.startswith("asyncio.")
 
+    def _operation_count(self, scenario: BaseScenario, num_readers: int, num_writers: int) -> int:
+        return (num_readers + num_writers) * scenario.iterations
+
     def _collect_garbage(self, config: BenchmarkConfig) -> None:
         if config.collect_garbage and config.gc_collect_scope != "none":
             gc.collect()
@@ -336,7 +371,7 @@ class BenchmarkerBase:
     def run_workload(self, name: str, scenario:BaseScenario, num_readers: int, num_writers: int, trials: int | None = None):
         config = self._resolve_config(trials)
         iterations = scenario.iterations
-        total_ops = (num_readers + num_writers) * iterations
+        total_ops = self._operation_count(scenario, num_readers, num_writers)
         target_type = "Condition Implementation" if "Condition" in self.__class__.__name__ else "Lock Implementation"
         baseline_candidates, results = [], []
         measured_trials: dict[Type, list[float]] = {target_class: [] for target_class in self.target_classes}
@@ -363,7 +398,7 @@ class BenchmarkerBase:
             final_elapsed = aggregate(measured_trials[target_class])
             if self._is_baseline_target(target_name):
                 baseline_candidates.append(final_elapsed)
-            results.append((target_name, final_elapsed, total_ops / final_elapsed))
+            results.append((target_name, final_elapsed, total_ops / final_elapsed, measured_trials[target_class]))
         baseline_time = min(baseline_candidates) if baseline_candidates else None
         return self.data_handler.process(name, num_readers, num_writers, iterations, target_type, results, baseline_time)
 
@@ -386,7 +421,7 @@ class AsyncBenchmarkerBase(BenchmarkerBase):
     async def run_workload(self, name: str, scenario:BaseScenario, num_readers: int, num_writers: int, trials: int | None = None):
         config = self._resolve_config(trials)
         iterations = scenario.iterations
-        total_ops = (num_readers + num_writers) * iterations
+        total_ops = self._operation_count(scenario, num_readers, num_writers)
         target_type = "Condition Implementation" if "Condition" in self.__class__.__name__ else "Lock Implementation"
         baseline_candidates, results = [], []
         measured_trials: dict[Type, list[float]] = {target_class: [] for target_class in self.target_classes}
@@ -413,6 +448,6 @@ class AsyncBenchmarkerBase(BenchmarkerBase):
             final_elapsed = aggregate(measured_trials[target_class])
             if self._is_baseline_target(target_name):
                 baseline_candidates.append(final_elapsed)
-            results.append((target_name, final_elapsed, total_ops / final_elapsed))
+            results.append((target_name, final_elapsed, total_ops / final_elapsed, measured_trials[target_class]))
         baseline_time = min(baseline_candidates) if baseline_candidates else None
         return self.data_handler.process(name, num_readers, num_writers, iterations, target_type, results, baseline_time)

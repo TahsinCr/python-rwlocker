@@ -32,9 +32,9 @@ class TransactionLedger:
             self._dispatch_audit_event(tx_id, self._balance)
             
         finally:
-            # Important: Since we downgraded, we must release the READ lock.
-            # The smart proxy handles this safely.
-            self._lock.read.release()
+            # The writer proxy routes release to the read side if downgraded,
+            # and releases the write side if an earlier operation raised.
+            self._lock.write.release()
 
     def _dispatch_audit_event(self, tx_id: str, balance: float) -> None:
         """Simulates a slow network call to an external auditing service."""

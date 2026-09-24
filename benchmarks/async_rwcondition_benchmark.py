@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import time
 
@@ -56,6 +58,9 @@ class AsyncRWConditionFairWrapper:
 
 
 class AsyncConditionBenchmarker(AsyncBenchmarkerBase):
+    def _operation_count(self, scenario: BaseScenario, num_readers: int, num_writers: int) -> int:
+        return num_readers * scenario.iterations * num_writers + num_writers * scenario.iterations
+
     async def _reader_worker(
         self, 
         cond:AsyncRWConditionBase, 
@@ -70,8 +75,8 @@ class AsyncConditionBenchmarker(AsyncBenchmarkerBase):
         while expected <= target_epoch:
             async with cond.read:
                 await cond.read.wait_for(lambda: scenario.epoch >= expected)
-                expected = scenario.epoch + 1 
                 await scenario.execute_read(worker_id)
+                expected += 1
 
     async def _writer_worker(
         self, 

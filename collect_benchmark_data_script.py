@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 import json
 import asyncio
@@ -62,7 +64,7 @@ class BenchmarkDataCollector:
     def __init__(self, filepath: Path, config: BenchmarkConfig | None = None):
         self.filepath = filepath
         self.data_handler = BenchmarkDataHandler()
-        self.config = config or BenchmarkConfig.interactive()
+        self.config = config or BenchmarkConfig.reporting()
 
     def collect(self, sync_scenarios: List[BaseScenario], async_scenarios: List[AsyncBaseScenario]):
         print(f"[{self.filepath}] Data collection has begun...")

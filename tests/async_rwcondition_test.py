@@ -17,6 +17,16 @@ class BaseAsyncConditionTests:
             self.lock = self.lock_class()
             self.condition = AsyncCondition(self.lock)
 
+    async def _wait_for_condition_waiters(self, expected: int, timeout: float = 1.0) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        queue = getattr(self.condition, "_queue", None)
+        waiters = queue._waiters if queue is not None else self.condition.write._waiters
+        while asyncio.get_running_loop().time() < deadline:
+            if len(waiters) >= expected:
+                return
+            await asyncio.sleep(0)
+        self.fail(f"Expected {expected} Condition waiters to be queued")
+
     async def test_initial_state(self):
         self.assertFalse(self.condition.read.locked())
         self.assertFalse(self.condition.write.locked())
@@ -47,8 +57,7 @@ class BaseAsyncConditionTests:
                 wait_success = True
 
         t = asyncio.create_task(waiter_task())
-        # Yield to allow the waiter task to acquire the lock and enter wait()
-        await asyncio.sleep(0.05)
+        await self._wait_for_condition_waiters(1)
 
         async with self.condition.write:
             event_happened = True
@@ -68,7 +77,7 @@ class BaseAsyncConditionTests:
                 wait_count += 1
 
         tasks = [asyncio.create_task(waiter_task()) for _ in range(5)]
-        await asyncio.sleep(0.05)
+        await self._wait_for_condition_waiters(len(tasks))
 
         async with self.condition.write:
             event_happened = True
@@ -79,23 +88,25 @@ class BaseAsyncConditionTests:
 
     async def test_notify_n_wakes_specific_number_of_waiters(self):
         wait_count = 0
+        two_woken = asyncio.Event()
 
         async def waiter_task():
             nonlocal wait_count
             async with self.condition.read:
                 await self.condition.read.wait()
                 wait_count += 1
+                if wait_count == 2:
+                    two_woken.set()
 
         tasks = [asyncio.create_task(waiter_task()) for _ in range(4)]
-        await asyncio.sleep(0.05)
+        await self._wait_for_condition_waiters(len(tasks))
 
         async with self.condition.write:
             # Wake exactly 2 tasks out of 4
             self.condition.write.notify(n=2)
 
-        # Small delay to let notified tasks complete
-        await asyncio.sleep(0.05)
-        
+        await asyncio.wait_for(two_woken.wait(), timeout=1.0)
+
         # At this stage, 2 should be done, 2 should be waiting
         self.assertEqual(wait_count, 2, "Exactly n tasks should have been awoken.")
 
@@ -117,7 +128,7 @@ class BaseAsyncConditionTests:
                 wait_count += 1
 
         tasks = [asyncio.create_task(waiter_task()) for _ in range(100)]
-        await asyncio.sleep(0.2)
+        await self._wait_for_condition_waiters(len(tasks))
 
         async with self.condition.write:
             event_happened = True
@@ -131,16 +142,21 @@ class BaseAsyncConditionTests:
         Verify that cancelling a waiting task does not corrupt the lock state
         and that the task re-acquires the lock before propagating the error.
         """
-        async with self.condition.read:
-            wait_task = asyncio.create_task(self.condition.read.wait())
-            await asyncio.sleep(0.05)
-            
-            wait_task.cancel()
-            
-            try:
-                await wait_task
-            except asyncio.CancelledError:
-                pass
+        wait_started = asyncio.Event()
+
+        async def waiter():
+            async with self.condition.read:
+                wait_started.set()
+                await self.condition.read.wait()
+
+        wait_task = asyncio.create_task(waiter())
+        await wait_started.wait()
+        await self._wait_for_condition_waiters(1)
+        wait_task.cancel()
+        try:
+            await wait_task
+        except asyncio.CancelledError:
+            pass
         
         # The lock should be released and available for others
         self.assertFalse(self.condition.read.locked())
@@ -148,18 +164,15 @@ class BaseAsyncConditionTests:
             self.assertTrue(self.condition.write.locked())
 
     async def test_wait_for_timeout(self):
-        async with self.condition.read:
-            start_time = asyncio.get_running_loop().time()
-            success = True
-            try:
-                # Using external asyncio.wait_for as per docstring recommendation
-                await asyncio.wait_for(self.condition.read.wait_for(lambda: False), timeout=0.1)
-            except asyncio.TimeoutError:
-                success = False
-            
-            elapsed = asyncio.get_running_loop().time() - start_time
-            self.assertFalse(success, "wait_for should timeout when the predicate remains False.")
-            self.assertGreaterEqual(elapsed, 0.09)
+        async def wait_for_predicate():
+            async with self.condition.read:
+                await self.condition.read.wait_for(lambda: False)
+
+        start_time = asyncio.get_running_loop().time()
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(wait_for_predicate(), timeout=0.1)
+        elapsed = asyncio.get_running_loop().time() - start_time
+        self.assertGreaterEqual(elapsed, 0.09)
 
 class AsyncRWConditionTests(BaseAsyncConditionTests):
     async def asyncSetUp(self):

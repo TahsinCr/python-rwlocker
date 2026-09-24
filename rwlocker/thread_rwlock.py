@@ -6,6 +6,8 @@ and their corresponding Condition variables. It supports different scheduling
 strategies (Write-preferring, Read-preferring, Reader-Phase Fair, Strict Fair)
 and safe reentrancy for writer threads.
 """
+from __future__ import annotations
+
 import time
 import threading
 from abc import abstractmethod
@@ -35,7 +37,7 @@ from .queues import (
     ThreadConditionQueue
 )
 
-__version__ = '3.3'
+__version__ = '3.4'
 __all__ = (
     'Lockable', 'LockDowngradable', 
     'RWLockBase', 'RWLockWithProxyBase',
@@ -222,11 +224,38 @@ class RWLockWithProxyBase(RWLockBase):
     exposing `read` and `write` attributes as proxy instances that route logic 
     to the overridden internal core methods (`_acquire_read_core`, etc.).
     """
-    __slots__ = ()
+    __slots__ = ("_reader_owners", "_writer_owner")
     def __init__(self, lock: Optional[Lockable] = None):
         self._lock = threading.Lock() if lock is None else lock
+        self._reader_owners = {}
+        self._writer_owner = None
         self.read:RWLockReaderProxy = RWLockReaderProxy(rwlock=self)
         self.write:RWLockWriterProxy = RWLockWriterProxy(rwlock=self)
+
+    def _current_reader_owner(self):
+        return threading.current_thread()
+
+    def _record_reader_acquire(self) -> None:
+        owner = self._current_reader_owner()
+        self._reader_owners[owner] = self._reader_owners.get(owner, 0) + 1
+
+    def _record_reader_release(self) -> None:
+        owner = self._current_reader_owner()
+        count = self._reader_owners.get(owner, 0)
+        if count == 0:
+            raise RuntimeError("Read lock is not held by the current thread")
+        if count == 1:
+            del self._reader_owners[owner]
+        else:
+            self._reader_owners[owner] = count - 1
+
+    def _is_current_reader(self) -> bool:
+        return self._reader_owners.get(self._current_reader_owner(), 0) > 0
+
+    def _is_current_writer(self) -> bool:
+        if hasattr(self, "_writer_id"):
+            return self._writer_id == threading.get_ident()
+        return self._writer_owner is self._current_reader_owner()
 
     @abstractmethod
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool: ...
@@ -268,7 +297,7 @@ class RWLockWrite(_RWLockWriteMixin, RWLockWithProxyBase):
         with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockWrite()
         
@@ -281,7 +310,7 @@ class RWLockWrite(_RWLockWriteMixin, RWLockWithProxyBase):
     """
     __slots__ = ('_writer_active', '_readers_active')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._writer_active = False
         self._readers_active = 0
 
@@ -293,10 +322,8 @@ class RWLockWriteReentrantWriter(
     Write-preferring Read-Write Lock with Write-Reentrancy support.
     
     Reentrancy Note:
-        This lock strictly supports nested *write* operations for the same thread.
-        It allows a thread holding the write lock to acquire it again safely.
-        It does NOT implicitly grant read locks to a writer; explicit downgrade
-        is required for that.
+        The owning thread can acquire nested write locks and a read lock. Other
+        readers can join only after an explicit downgrade opens shared access.
 
     Example:
         ```python
@@ -314,7 +341,7 @@ class RWLockWriteReentrantWriter(
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockWriteReentrantWriter()
         
@@ -327,7 +354,7 @@ class RWLockWriteReentrantWriter(
     """
     __slots__ = ('_writer_id', '_write_count')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._writer_id: Optional[int] = None
         self._write_count: int = 0
 
@@ -362,7 +389,7 @@ class RWLockRead(_RWLockReadMixin, RWLockWithProxyBase):
         with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockRead()
         
@@ -375,7 +402,7 @@ class RWLockRead(_RWLockReadMixin, RWLockWithProxyBase):
     """
     __slots__ = ('_writer_active', '_readers_active')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._writer_active = False
         self._readers_active = 0
 
@@ -405,7 +432,7 @@ class RWLockReadReentrantWriter(
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockReadReentrantWriter()
         
@@ -418,7 +445,7 @@ class RWLockReadReentrantWriter(
     """
     __slots__ = ('_writer_id', '_write_count')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._writer_id: Optional[int] = None
         self._write_count: int = 0
 
@@ -451,7 +478,7 @@ class RWLockReaderPhaseFair(_RWLockReaderPhaseFairMixin, RWLockWithProxyBase):
         with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockReaderPhaseFair()
 
@@ -461,7 +488,7 @@ class RWLockReaderPhaseFair(_RWLockReaderPhaseFairMixin, RWLockWithProxyBase):
     """
     __slots__ = ('_writer_active', '_readers_turn', '_readers_active')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._writer_active = False
         self._readers_turn = False
         self._readers_active = 0
@@ -483,7 +510,7 @@ class RWLockReaderPhaseFairReentrantWriter(
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockReaderPhaseFairReentrantWriter()
 
@@ -493,7 +520,7 @@ class RWLockReaderPhaseFairReentrantWriter(
     """
     __slots__ = ('_writer_id', '_write_count')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._writer_id: Optional[int] = None
         self._write_count: int = 0
 
@@ -525,7 +552,7 @@ class RWLockFair(_RWLockFairMixin, RWLockReaderPhaseFair):
         with lock.write:
             print("Updating data...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockFair()
 
@@ -535,7 +562,7 @@ class RWLockFair(_RWLockFairMixin, RWLockReaderPhaseFair):
     """
     __slots__ = ('_reader_phase_cutoff', '_reader_phase_pending')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._reader_phase_cutoff = 0
         self._reader_phase_pending = 0
 
@@ -556,7 +583,7 @@ class RWLockFairReentrantWriter(
             lock.write.downgrade()
             print("Downgraded to read mode.")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = RWLockFairReentrantWriter()
 
@@ -566,7 +593,7 @@ class RWLockFairReentrantWriter(
     """
     __slots__ = ('_writer_id', '_write_count')
     def __init__(self, lock: Optional[Lockable] = None):
-        super().__init__()
+        super().__init__(lock)
         self._writer_id: Optional[int] = None
         self._write_count: int = 0
 
@@ -600,7 +627,7 @@ class Lock(RWLockBase):
         with lock.write:
             print("Writing with standard lock...")
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         lock = Lock()
         
@@ -688,7 +715,7 @@ class RWConditionProxy:
         Wait until notified or until a timeout occurs.
         
         This method safely releases the underlying lock, sleeps, and re-acquires
-        the lock before returning, ensuring absolute state safety even during 
+        the lock before returning, including when cancellation is pending.
         interruptions or memory errors.
 
         Args:
@@ -861,8 +888,8 @@ class RWCondition(_RWConditionMixin, RWConditionWithProxyBase):
     Standard implementation of a Read-Write Condition variable.
     
     Utilizes a thread-safe `collections.deque` and a micro-lock to provide 
-    O(1) waiter queueing and wake-ups. It is highly optimized to prevent 
-    race conditions during massive `notify_all` calls (Cache Stampede protection).
+    Amortized O(1) waiter enqueue/dequeue and O(N) notifications. Each waiter
+    is signalled individually during `notify_all()`.
 
     Example:
         ```python
@@ -878,12 +905,12 @@ class RWCondition(_RWConditionMixin, RWConditionWithProxyBase):
             data_ready = True
             cond.write.notify_all()
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         cond = RWCondition() # RWLockWrite default lock
         
         # Direct usage bypasses explicit .read/.write proxies and defaults to 
-        # the exclusive write state, providing 100% API compatibility with 
+        # the exclusive write state, providing lock-style compatibility with
         # standard threading.Condition workflows.
         with cond:
             while not data_ready:
@@ -919,7 +946,7 @@ class Condition(RWConditionBase):
             data_ready = True
             cond.write.notify_all()
         ```
-    Example 2 (Drop-in Replacement):
+    Example 2 (Direct Lock Interface):
         ```python
         cond = Condition()
         

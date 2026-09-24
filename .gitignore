@@ -9,6 +9,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+.serena/
 build/
 dist/
 downloads/

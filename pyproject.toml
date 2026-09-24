@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rwlocker"
-version = "3.3"
+version = "3.4"
 description = "Advanced, High-Performance, and State-Machine Based Synchronous/Asynchronous Read-Write Locks."
 readme = {file = "README-pypi.md", content-type = "text/markdown"}
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.9"
 authors = [
   {name = "TahsinCr", email = "TahsinCrs@gmail.com"}
@@ -31,7 +31,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -52,3 +51,6 @@ Repository = "https://github.com/TahsinCr/python-rwlocker"
 
 [tool.setuptools.packages.find]
 include = ["rwlocker*"]
+
+[tool.setuptools.package-data]
+rwlocker = ["py.typed"]

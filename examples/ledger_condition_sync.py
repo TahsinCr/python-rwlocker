@@ -20,17 +20,17 @@ class LedgerConditionSync:
             
             # Atomic Downgrade: Lock becomes a Read lock.
             # We notify readers that a sync is STARTING.
-            self._cond.write._lock_proxy.downgrade()
-            self._cond.read.notify_all()
+            self._cond.write.downgrade()
             
             # Now we perform the slow sync (Network Call) while holding a READ lock.
             # This allows other tasks to read the state safely but blocks new Writers.
             print(f"[Sync] Uploading TX-{self._current_tx_id} to cloud...")
             await asyncio.sleep(0.5) 
+        # The write context releases its downgraded read side. Reacquire write
+        # access to publish completion and notify condition waiters.
+        async with self._cond.write:
             self._sync_completed = True
-            
-            # We must release the read lock we obtained via downgrade.
-            self._cond.read.release()
+            self._cond.write.notify_all()
 
     async def wait_for_sync(self, reader_id: int) -> None:
         """Reader: Waits until the ledger is fully synced to the cloud."""
@@ -57,11 +57,6 @@ async def main():
     
     await write_task
     
-    # After sync, we simulate a final "wake up" check to ensure readers unblock.
-    # (In a real app, the writer would set the flag and notify_all() again)
-    async with ledger._cond.write:
-        ledger._cond.write.notify_all()
-        
     await asyncio.gather(*reader_tasks)
 
 if __name__ == "__main__":

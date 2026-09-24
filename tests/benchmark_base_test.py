@@ -67,9 +67,9 @@ class BenchmarkerBaseTests(unittest.TestCase):
     def test_benchmark_config_profiles_balance_speed_and_reliability(self):
         self.assertEqual(BenchmarkConfig().trials, 3)
         self.assertEqual(BenchmarkConfig.interactive().trials, 2)
-        self.assertEqual(BenchmarkConfig.reporting().trials, 5)
+        self.assertEqual(BenchmarkConfig.reporting().trials, 10)
         self.assertEqual(BenchmarkConfig.interactive().warmup_trials, 1)
-        self.assertEqual(BenchmarkConfig.reporting().warmup_trials, 1)
+        self.assertEqual(BenchmarkConfig.reporting().warmup_trials, 2)
         self.assertEqual(BenchmarkConfig().gc_collect_scope, "round")
 
     def test_run_workload_uses_median_and_skips_warmup(self):
@@ -98,8 +98,23 @@ class BenchmarkerBaseTests(unittest.TestCase):
         self.assertEqual(data["baseline_time"], 3.0)
         self.assertEqual(data["results"][0]["name"], "threading.Lock (C-Baseline)")
         self.assertEqual(data["results"][0]["elapsed"], 3.0)
+        self.assertEqual(data["results"][0]["trial_elapsed"], [5.0, 3.0, 1.0])
+        self.assertEqual(data["results"][0]["variance"], 4.0)
+        self.assertEqual(data["results"][0]["mad"], 2.0)
+        self.assertEqual(data["results"][0]["p25"], 2.0)
+        self.assertIn("mean_ci95_bootstrap", data["results"][0])
         self.assertEqual(data["results"][1]["name"], "RWLockWrite")
         self.assertEqual(data["results"][1]["elapsed"], 9.0)
+
+    def test_condition_operation_count_matches_reader_epochs(self):
+        from benchmarks.thread_rwcondition_benchmark import ThreadConditionBenchmarker
+        from benchmarks.async_rwcondition_benchmark import AsyncConditionBenchmarker
+        scenario = _Scenario()
+        expected = 2 * 3 * 4 + 4 * 3
+        thread_benchmarker = ThreadConditionBenchmarker([], config=BenchmarkConfig.faster())
+        async_benchmarker = AsyncConditionBenchmarker([], config=BenchmarkConfig.faster())
+        self.assertEqual(thread_benchmarker._operation_count(scenario, 2, 4), expected)
+        self.assertEqual(async_benchmarker._operation_count(scenario, 2, 4), expected)
 
     def test_run_workload_uses_fastest_baseline_candidate(self):
         config = BenchmarkConfig(

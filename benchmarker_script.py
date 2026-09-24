@@ -46,11 +46,11 @@ async_conditions = [
 ]
 
 scenarios = [
-    IOBoundScenario(iterations=10) 
+    PureOverheadScenario(iterations=10)
 ]
 
 async_scenarios = [
-    AsyncIOBoundScenario(iterations=10)
+    AsyncPureOverheadScenario(iterations=10)
 ]
 
 benchmark_config = BenchmarkConfig.interactive()

@@ -6,7 +6,7 @@ class TelemetryDispatcher:
     """A highly concurrent state manager for robotics and real-time dashboards."""
     
     def __init__(self):
-        # Fair guarantees perfect interleaving between heavy reads and heavy writes.
+        # Fair scheduling reduces starvation risk but does not promise strict alternation.
         self._lock = AsyncRWLockFair()
         self._state: Dict[str, float] = {"alt": 0.0, "lat": 0.0, "lon": 0.0}
 
@@ -16,8 +16,8 @@ class TelemetryDispatcher:
         """
         async with self._lock.write:
             self._state.update(new_data)
-            # Minimal internal processing
-            await asyncio.sleep(0.001)
+        # Simulate processing outside the critical section.
+        await asyncio.sleep(0.001)
 
     async def broadcast_to_clients(self) -> None:
         """
