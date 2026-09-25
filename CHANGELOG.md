@@ -1,6 +1,28 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
+## **[3.4.1] - 24.09.2026**
+The **"Condition Wait Safety & Release Metadata"** patch release closes a deadlock edge case in reentrant condition waits, corrects per-interpreter benchmark speedups, and aligns package metadata and CI checks with the published installation instructions.
+
+### Fixed
+* **Condition Wait with Nested Ownership**:
+    * Synchronous and asynchronous condition waits now reject nested read/write acquisitions before registering a waiter or releasing the lock. This prevents a wait from sleeping while recursive ownership still holds the lock.
+    * The error also covers a read wait entered while the same owner still holds the write side. Recursive depth restoration is not supported by these condition proxies.
+    * Added regression coverage for nested read, nested write, and combined write/read ownership in both runtimes.
+* **Benchmark Reporting**:
+    * Normalize each synchronous speedup against the baseline collected in the same interpreter environment.
+    * Pass the benchmark's operation count directly to result handlers instead of deriving it from rounded throughput and elapsed time.
+* **Package Metadata and Documentation**:
+    * Correct the 3.4 PyPI metadata: mark the project Beta rather than Production/Stable, and define the documented `benchmark` extra for pandas, matplotlib, and seaborn.
+    * Clarify wait behavior in the thread docstring and qualify fairness descriptions that previously implied starvation could never occur.
+
+### CI
+* Build source and wheel distributions, run `twine check`, install and inspect the wheel metadata/import, and verify that the optional benchmark dependencies load.
+
+### Validation
+* All 472 tests passed on Python 3.14.7 (15 skipped); the plotting regression ran and passed with the `benchmark` extra installed.
+* The 3.4.1 source and wheel distributions built locally, and `twine check` passed for both artifacts.
+
 ## **[3.4] - 24.09.2026**
 The **"Correctness, Packaging & Benchmark Reporting"** update. This release fixes ownership and injected-lock handling, improves Python-version and package metadata, makes benchmark collection reproducible and more informative, repairs examples, and revises documentation to describe measured behavior accurately.
 
@@ -22,8 +44,7 @@ The **"Correctness, Packaging & Benchmark Reporting"** update. This release fixe
     * Plot all collected async interpreter environments and compare synchronous results within their matching interpreter environment.
 * **Package and CI**:
     * Declare Python 3.9–3.14 in the CI matrix and add a package import check.
-    * Include `py.typed` in built distributions and declare plotting dependencies under the optional `benchmark` extra; the runtime package remains dependency-free.
-    * Mark the project as Beta while supported-version and concurrency behavior continue to receive CI coverage.
+    * Include `py.typed` in built distributions; the runtime package remains dependency-free.
 * **Documentation and Historical Corrections**:
     * Describe condition queue operations accurately: enqueue/FIFO dequeue are amortized O(1), while broadcast and arbitrary waiter removal are O(N).
     * Clarify that lock-style compatibility is not universal drop-in compatibility, fairness outcomes depend on workload, and benchmark ratios describe end-to-end workloads.

@@ -58,7 +58,7 @@ You can select the right lock strategy based on your system's bottleneck profile
 
 | Strategy Type | Class Name (Thread / Async) | Description | When to Use? |
 | --- | --- | --- | --- |
-| **Writer-Preferring** | `RWLockWrite` / `AsyncRWLockWrite` | Forbids new readers from entering if there is a waiting writer. Prevents writer starvation. | To prevent writers from being overwhelmed in read-heavy systems. |
+| **Writer-Preferring** | `RWLockWrite` / `AsyncRWLockWrite` | Forbids new readers from entering if there is a waiting writer. Prioritizes waiting writers and can reduce writer starvation while they continue making progress. | To prevent writers from being overwhelmed in read-heavy systems. |
 | **Reader-Preferring** | `RWLockRead` / `AsyncRWLockRead` | Continuously allows new readers in, even if writers are waiting. Provides maximum parallelism. | In cache structures where write operations are very rare or non-critical. |
 | **Reader-Phase Fair** | `RWLockReaderPhaseFair` / `AsyncRWLockReaderPhaseFair` | Alternates between reader and writer phases, but late readers may still join an already-open reader phase for higher read throughput. | When you want bounded fairness without fully freezing each reader batch. |
 | **Fair** | `RWLockFair` / `AsyncRWLockFair` | Freezes each reader phase at phase start so late readers cannot cut in front of an already-queued writer. Designed to reduce starvation when lock holders continue to make progress. | In bidirectional traffic where ordered writer access matters. |
@@ -80,7 +80,7 @@ Lock classes establish a circular reference graph (Lock -> Proxy -> Lock) when c
 4. **The Cost of Fairness:**
 The `Fair` strategy schedules queued readers and writers in phases to reduce starvation while participants continue making progress. This ordering can reduce throughput in some workloads. In the recorded condition workload, the Fair variant was slower than the exclusive-lock standard `threading.Condition` baseline; that comparison includes different locking semantics and does not isolate fairness overhead.
 5. **Condition Queue Costs:**
-Each waiting thread/task has a waiter object. `notify_all()` signals every waiter and therefore takes O(N) time; arbitrary timeout/cancellation removal also takes O(N). Memory use grows with the number of waiters.
+Each waiting thread/task has a waiter object. `notify_all()` signals every waiter and therefore takes O(N) time; arbitrary timeout/cancellation removal also takes O(N). Memory use grows with the number of waiters. `Condition.wait()` requires exactly one lock acquisition; nested acquisition depths raise `RuntimeError` because recursive depth is not saved and restored.
 6. **Exclusive Fallback:**
 Direct lock operations (such as `with lock:`) use the exclusive write proxy. This is a concurrency default, not a security boundary; use `.read` and `.write` explicitly when access mode matters.
 
@@ -272,7 +272,7 @@ class AuthTokenManager:
 
 #### 4. High-Frequency Telemetry (Fair Distribution)
 
-Data arrives from a sensor 100 times per second (Write), and 200 WebSockets read this data (Read). The Fair architecture prevents both sides from starving.
+Data arrives from a sensor 100 times per second (Write), and 200 WebSockets read this data (Read). The Fair architecture is intended to reduce starvation risk while lock holders continue making progress.
 
 ```python
 import asyncio
@@ -281,7 +281,7 @@ from rwlocker.async_rwlock import AsyncRWLockFair
 
 class TelemetryDispatcher:
     def __init__(self):
-        # Fair prevents read and write intensities from choking each other.
+        # Fair schedules queued readers and writers in phases while holders continue making progress.
         self._lock = AsyncRWLockFair()
         self._state = {"alt": 0.0, "lat": 0.0, "lon": 0.0}
 
@@ -363,7 +363,7 @@ from rwlocker.thread_rwlock import RWLockFair, RWCondition
 
 class ImageProcessingQueue:
     def __init__(self):
-        # Fair strategy to prevent Producers and Consumers from crushing each other
+        # Fair strategy to schedule waiting producers and consumers in phases
         self._cond = RWCondition(RWLockFair())
         self._queue = deque()
 

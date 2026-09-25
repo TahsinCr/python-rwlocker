@@ -88,7 +88,7 @@ class BenchmarkDataHandler:
     def __init__(self):
         self.history = []
 
-    def process(self, name: str, num_readers: int, num_writers: int, iterations: int, target_type: str, results: list, baseline_time: float) -> dict:
+    def process(self, name: str, num_readers: int, num_writers: int, iterations: int, target_type: str, results: list, baseline_time: float, total_operations: int) -> dict:
         results.sort(key=lambda x: x[1])
         
         formatted_results = []
@@ -107,7 +107,7 @@ class BenchmarkDataHandler:
             "readers": num_readers,
             "writers": num_writers,
             "iterations": iterations,
-            "total_operations": int(round(results[0][2] * results[0][1])) if results else 0,
+            "total_operations": total_operations,
             "target_type": target_type,
             "baseline_time": baseline_time,
             "results": formatted_results
@@ -268,8 +268,8 @@ class BenchmarkPrintHandler(BenchmarkDataHandler):
             f" | {self._style('Ops:', self._DIM)} {self._format_ops(total_ops)}"
         )
 
-    def process(self, name: str, num_readers: int, num_writers: int, iterations: int, target_type: str, results: list, baseline_time: float) -> dict:
-        data = super().process(name, num_readers, num_writers, iterations, target_type, results, baseline_time)
+    def process(self, name: str, num_readers: int, num_writers: int, iterations: int, target_type: str, results: list, baseline_time: float, total_operations: int) -> dict:
+        data = super().process(name, num_readers, num_writers, iterations, target_type, results, baseline_time, total_operations)
 
         total_width, name_width, time_width, ops_width, speed_width = self._layout(data["target_type"], data["results"])
         divider = "-" * total_width
@@ -400,7 +400,7 @@ class BenchmarkerBase:
                 baseline_candidates.append(final_elapsed)
             results.append((target_name, final_elapsed, total_ops / final_elapsed, measured_trials[target_class]))
         baseline_time = min(baseline_candidates) if baseline_candidates else None
-        return self.data_handler.process(name, num_readers, num_writers, iterations, target_type, results, baseline_time)
+        return self.data_handler.process(name, num_readers, num_writers, iterations, target_type, results, baseline_time, total_ops)
 
     def _create_workers(self, target_obj: object, scenario: BaseScenario, num_readers: int, num_writers: int, start_barrier: threading.Barrier) -> list:
         raise NotImplementedError
@@ -450,4 +450,4 @@ class AsyncBenchmarkerBase(BenchmarkerBase):
                 baseline_candidates.append(final_elapsed)
             results.append((target_name, final_elapsed, total_ops / final_elapsed, measured_trials[target_class]))
         baseline_time = min(baseline_candidates) if baseline_candidates else None
-        return self.data_handler.process(name, num_readers, num_writers, iterations, target_type, results, baseline_time)
+        return self.data_handler.process(name, num_readers, num_writers, iterations, target_type, results, baseline_time, total_ops)

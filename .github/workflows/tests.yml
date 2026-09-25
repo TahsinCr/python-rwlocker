@@ -17,3 +17,38 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m unittest discover -s tests -p '*_test.py'
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: python -m twine check dist/*
+      - run: python -m pip install --no-deps --target wheel-install dist/*.whl
+      - name: Verify built wheel metadata and import
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "wheel-install")
+          from importlib.metadata import distribution
+          import rwlocker
+
+          package = distribution("rwlocker")
+          assert package.version == "3.4.1", package.version
+          assert rwlocker.__version__ == package.version
+          assert "Development Status :: 4 - Beta" in package.metadata.get_all("Classifier")
+          assert "benchmark" in (package.metadata.get_all("Provides-Extra") or [])
+          assert Path("wheel-install/rwlocker/py.typed").is_file()
+          print(f"Verified rwlocker {package.version} wheel")
+          PY
+      - name: Verify benchmark plotting imports
+        run: |
+          python -m pip install '.[benchmark]'
+          python -c "import pandas, matplotlib, seaborn"
+      - run: python -m unittest discover -s tests -p 'benchmark_figure_test.py'

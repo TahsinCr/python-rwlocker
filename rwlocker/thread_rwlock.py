@@ -37,7 +37,7 @@ from .queues import (
     ThreadConditionQueue
 )
 
-__version__ = '3.4'
+__version__ = '3.4.1'
 __all__ = (
     'Lockable', 'LockDowngradable', 
     'RWLockBase', 'RWLockWithProxyBase',
@@ -655,7 +655,8 @@ class RWConditionProxy:
     """
     __slots__ = (
         '_lock_proxy', '_is_owned', '_add_waiter', 
-        '_remove_waiter', '_notify_core', '_notify_all_core'
+        '_remove_waiter', '_notify_core', '_notify_all_core',
+        '_get_owned_depth'
     )
     
     def __init__(self, 
@@ -664,7 +665,8 @@ class RWConditionProxy:
         add_waiter: Callable[[], threading.Lock],
         remove_waiter: Callable[[threading.Lock], None],
         notify_core: Callable[[int], None],
-        notify_all_core: Callable[[], None]
+        notify_all_core: Callable[[], None],
+        get_owned_depth: Optional[Callable[[], int]] = None
     ):
         self._lock_proxy = lock_proxy
         self._is_owned = is_owned
@@ -672,6 +674,7 @@ class RWConditionProxy:
         self._remove_waiter = remove_waiter
         self._notify_core = notify_core
         self._notify_all_core = notify_all_core
+        self._get_owned_depth = get_owned_depth
 
     def acquire(self, blocking: bool = True, timeout: float = -1.0) -> bool:
         """
@@ -714,9 +717,9 @@ class RWConditionProxy:
         """
         Wait until notified or until a timeout occurs.
         
-        This method safely releases the underlying lock, sleeps, and re-acquires
-        the lock before returning, including when cancellation is pending.
-        interruptions or memory errors.
+        This method releases the underlying lock while waiting and reacquires
+        it before returning. Nested lock acquisitions are rejected because this
+        condition does not restore recursive lock depth.
 
         Args:
             timeout (float, optional): Maximum time in seconds to wait.
@@ -725,10 +728,15 @@ class RWConditionProxy:
             bool: True if awoken by a `notify()` call, False if the timeout expired.
             
         Raises:
-            RuntimeError: If the lock is not owned when `wait()` is called.
+            RuntimeError: If the lock is not owned or has nested acquisitions.
         """
         if not self._is_owned():
             raise RuntimeError("cannot wait on un-acquired lock")
+        if self._get_owned_depth is not None and self._get_owned_depth() != 1:
+            raise RuntimeError(
+                "Condition.wait() requires exactly one lock acquisition; "
+                "nested acquisitions are not supported"
+            )
             
         waiter = self._add_waiter()
         try:
@@ -823,7 +831,8 @@ class RWConditionReaderProxy(RWConditionProxy):
             add_waiter=rwcond._add_waiter,
             remove_waiter=rwcond._remove_waiter,
             notify_core=rwcond._notify_core,
-            notify_all_core=rwcond._notify_all_core
+            notify_all_core=rwcond._notify_all_core,
+            get_owned_depth=getattr(rwcond, "_get_owned_lock_depth", None)
         )
 
 class RWConditionWriterProxy(RWConditionProxy):
@@ -841,7 +850,8 @@ class RWConditionWriterProxy(RWConditionProxy):
             add_waiter=rwcond._add_waiter,
             remove_waiter=rwcond._remove_waiter,
             notify_core=rwcond._notify_core,
-            notify_all_core=rwcond._notify_all_core
+            notify_all_core=rwcond._notify_all_core,
+            get_owned_depth=getattr(rwcond, "_get_owned_lock_depth", None)
         )
     
     def downgrade(self):

@@ -8,7 +8,7 @@ access is available through ``.read`` and exclusive access through ``.write``.
 
 from importlib import import_module
 
-__version__ = "3.4"
+__version__ = "3.4.1"
 
 _THREAD_EXPORTS = (
     "Lockable", "LockDowngradable", "RWLockBase", "RWLockWithProxyBase",

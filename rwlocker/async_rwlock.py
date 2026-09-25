@@ -37,7 +37,7 @@ from .queues import (
     AsyncConditionQueue
 )
 
-__version__ = '3.4'
+__version__ = '3.4.1'
 __all__ = (
     'AsyncLockable', 'AsyncLockDowngradable', 
     'AsyncRWLockBase', 'AsyncRWLockWithProxyBase', 
@@ -627,7 +627,8 @@ class AsyncRWConditionProxy:
     """
     __slots__ = (
         '_lock_proxy', '_is_owned', '_add_waiter', 
-        '_remove_waiter', '_notify_core', '_notify_all_core'
+        '_remove_waiter', '_notify_core', '_notify_all_core',
+        '_get_owned_depth'
     )
     
     def __init__(self, 
@@ -636,7 +637,8 @@ class AsyncRWConditionProxy:
         add_waiter: Callable[[], asyncio.Future],
         remove_waiter: Callable[[asyncio.Future], None],
         notify_core: Callable[[int], None],
-        notify_all_core: Callable[[], None]
+        notify_all_core: Callable[[], None],
+        get_owned_depth: Optional[Callable[[], int]] = None
     ):
         self._lock_proxy = lock_proxy
         self._is_owned = is_owned
@@ -644,6 +646,7 @@ class AsyncRWConditionProxy:
         self._remove_waiter = remove_waiter
         self._notify_core = notify_core
         self._notify_all_core = notify_all_core
+        self._get_owned_depth = get_owned_depth
 
     async def acquire(self, blocking: bool = True) -> bool:
         """
@@ -687,23 +690,27 @@ class AsyncRWConditionProxy:
         """
         Wait until notified.
 
-        This method safely releases the underlying lock, yields control to the 
-        asyncio event loop to allow other tasks to run, and strictly guarantees 
-        that the lock will be re-acquired before returning, even if the waiting 
-        task is cancelled.
+        This method releases the underlying lock while waiting and reacquires
+        it before returning. Nested lock acquisitions are rejected because this
+        condition does not restore recursive lock depth.
 
         Returns:
             bool: Always returns True if awoken safely by a `notify()` call.
             
         Raises:
-            RuntimeError: If the lock is not owned by the current task when 
-                          `wait()` is called.
+            RuntimeError: If the lock is not owned by the current task or has
+                          nested acquisitions.
             asyncio.CancelledError: If the task is cancelled while waiting. The 
                                     exception is propagated ONLY after the lock 
                                     is safely re-acquired to prevent state corruption.
         """
         if not self._is_owned():
             raise RuntimeError("cannot wait on un-acquired lock")
+        if self._get_owned_depth is not None and self._get_owned_depth() != 1:
+            raise RuntimeError(
+                "Condition.wait() requires exactly one lock acquisition; "
+                "nested acquisitions are not supported"
+            )
             
         waiter = self._add_waiter()
         try:
@@ -804,7 +811,8 @@ class AsyncRWConditionReaderProxy(AsyncRWConditionProxy):
             add_waiter=rwcond._add_waiter,
             remove_waiter=rwcond._remove_waiter,
             notify_core=rwcond._notify_core,
-            notify_all_core=rwcond._notify_all_core
+            notify_all_core=rwcond._notify_all_core,
+            get_owned_depth=getattr(rwcond, "_get_owned_lock_depth", None)
         )
 
 class AsyncRWConditionWriterProxy(AsyncRWConditionProxy):
@@ -823,7 +831,8 @@ class AsyncRWConditionWriterProxy(AsyncRWConditionProxy):
             add_waiter=rwcond._add_waiter,
             remove_waiter=rwcond._remove_waiter,
             notify_core=rwcond._notify_core,
-            notify_all_core=rwcond._notify_all_core
+            notify_all_core=rwcond._notify_all_core,
+            get_owned_depth=getattr(rwcond, "_get_owned_lock_depth", None)
         )
     
     def downgrade(self) -> None:

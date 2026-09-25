@@ -455,6 +455,26 @@ class _RWConditionMixin:
         is_owned = getattr(self._lock, "_is_current_writer", None)
         return is_owned() if is_owned is not None else self._lock._is_write_locked()
 
+    def _get_owned_lock_depth(self) -> int:
+        """Return this owner’s combined read/write acquisition depth."""
+        lock = self._lock
+        current_reader = getattr(lock, "_current_reader_owner", None)
+        reader_owners = getattr(lock, "_reader_owners", None)
+        if current_reader is not None and reader_owners is not None:
+            read_depth = reader_owners.get(current_reader(), 0)
+        else:
+            read_depth = int(self._is_owned_read())
+
+        is_current_writer = getattr(lock, "_is_current_writer", None)
+        if is_current_writer is not None and is_current_writer():
+            write_depth = getattr(lock, "_write_count", 1)
+        elif is_current_writer is not None:
+            write_depth = 0
+        else:
+            write_depth = int(self._is_owned_write())
+
+        return read_depth + write_depth
+
     def _add_waiter(self):
         return self._queue.add_waiter()
 

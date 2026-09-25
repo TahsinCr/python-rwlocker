@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rwlocker"
-version = "3.4"
+version = "3.4.1"
 description = "Advanced, High-Performance, and State-Machine Based Synchronous/Asynchronous Read-Write Locks."
 readme = {file = "README-pypi.md", content-type = "text/markdown"}
 license = "MIT"
@@ -27,7 +27,7 @@ keywords = [
 ]
 
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
@@ -42,6 +42,9 @@ classifiers = [
 ]
 
 dependencies = []
+
+[project.optional-dependencies]
+benchmark = ["pandas", "matplotlib", "seaborn"]
 
 [project.urls]
 Homepage = "https://github.com/TahsinCr/python-rwlocker"

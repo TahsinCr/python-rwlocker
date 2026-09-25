@@ -95,6 +95,7 @@ class BenchmarkerBaseTests(unittest.TestCase):
         data = benchmarker.run_workload("demo", scenario, num_readers=2, num_writers=1)
 
         self.assertEqual(scenario.reset_calls, 8)
+        self.assertEqual(data["total_operations"], 9)
         self.assertEqual(data["baseline_time"], 3.0)
         self.assertEqual(data["results"][0]["name"], "threading.Lock (C-Baseline)")
         self.assertEqual(data["results"][0]["elapsed"], 3.0)

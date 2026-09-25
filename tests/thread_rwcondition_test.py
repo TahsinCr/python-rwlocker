@@ -222,6 +222,47 @@ class RWConditionTests(BaseConditionTests):
             self.lock = self.lock_class()
             self.condition = RWCondition(self.lock)
 
+    def test_wait_rejects_nested_read_acquisitions(self):
+        proxy = self.condition.read
+        proxy.acquire()
+        proxy.acquire()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "nested acquisitions"):
+                proxy.wait(timeout=0)
+            self.assertTrue(proxy.locked())
+            self.assertEqual(len(self.condition._queue._waiters), 0)
+        finally:
+            proxy.release()
+            proxy.release()
+
+    def test_wait_rejects_nested_write_acquisitions(self):
+        if not hasattr(self.lock, "_write_count"):
+            self.skipTest("lock strategy does not support reentrant writers")
+        proxy = self.condition.write
+        proxy.acquire()
+        proxy.acquire()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "nested acquisitions"):
+                proxy.wait(timeout=0)
+            self.assertTrue(proxy.locked())
+            self.assertEqual(len(self.condition._queue._waiters), 0)
+        finally:
+            proxy.release()
+            proxy.release()
+
+    def test_read_wait_rejects_read_acquired_inside_write_lock(self):
+        if not hasattr(self.lock, "_write_count"):
+            self.skipTest("lock strategy does not support reentrant writers")
+        self.condition.write.acquire()
+        self.condition.read.acquire()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "nested acquisitions"):
+                self.condition.read.wait(timeout=0)
+            self.assertTrue(self.condition.write.locked())
+        finally:
+            self.condition.read.release()
+            self.condition.write.release()
+
     def test_downgrade_condition_release_safety(self):
         """
         Verify that if the underlying Write proxy is downgraded, the Condition 

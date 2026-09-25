@@ -44,7 +44,7 @@ Python'daki standart kilitler (`Lock`, `RLock`) **Exclusive (Dışlayıcı)** ki
 * **Akıllı Proxy Mimarisi (Smart Proxy Architecture):** `.read` ve `.write` proxy'leri ile `with` ve `async with` context manager'larını sezgisel olarak kullanma imkanı.
 * **Atomik Derece Düşürme (Downgrading):** Yazma kilidini tamamen serbest bırakmadan, araya başka bir yazar girmesine izin vermeden anında Okuma kilidine (`downgrade()`) düşürebilme özelliği.
 * **Yazar Reentrancy'si:** `ReentrantWriter` varyantları, kilidin sahibi olan thread veya task'ın iç içe yazma kilitleri ve bir okuma kilidi almasına izin verir; diğer okuyucular `.downgrade()` paylaşımlı erişimi açtıktan sonra katılabilir.
-* **Condition Bekleme Kuyrukları:** Bekleyenler FIFO deque yapısında tutulur. Normal ekleme/çıkarma amortize O(1); tüm bekleyenleri bildirme ve iptal edilen bekleyeni kuyruktan çıkarma O(N) olabilir.
+* **Condition Bekleme Kuyrukları:** Bekleyenler FIFO deque yapısında tutulur. Normal ekleme/çıkarma amortize O(1); tüm bekleyenleri bildirme ve iptal edilen bekleyeni kuyruktan çıkarma O(N) olabilir. `Condition.wait()` tam bir kilit edinimi gerektirir; özyinelemeli derinlik saklanıp geri yüklenmediğinden iç içe edinimler `RuntimeError` üretir.
 * **Asenkron İptal Temizliği:** İptal edilen task kuyruktan çıkarılır; condition bekleyişi iptal hatası yayılmadan önce ilişkili kilidi yeniden alır.
 * **Kilit Tarzı Arayüz:** Doğrudan kilit işlemleri dışlayıcı `.write` proxy’sini kullanır. Standart kilitlerle imzalar ve gözlenebilir davranış her durumda aynı değildir; entegrasyon uyumluluğunu kontrol edin.
 * **Çekişmesiz Hızlı Yol:** Çekişme yokken waiter nesnesi oluşturulmaz; çekişmeli bekleme ve bildirim yine Python ve scheduler işi gerektirir.
@@ -58,7 +58,7 @@ Sisteminizin darboğaz profiline göre doğru kilit stratejisini seçebilirsiniz
 
 | Strateji Türü | Sınıf Adı (Thread / Async) | Açıklama | Ne Zaman Kullanılır? |
 | --- | --- | --- | --- |
-| **Yazar Öncelikli** | `RWLockWrite` / `AsyncRWLockWrite` | Bekleyen bir yazar varsa, yeni okuyucuların girmesini yasaklar. Yazar açlığını (starvation) önler. | Okuma yoğun sistemlerde yazarların ezilmesini engellemek için. |
+| **Yazar Öncelikli** | `RWLockWrite` / `AsyncRWLockWrite` | Bekleyen bir yazar varsa, yeni okuyucuların girmesini yasaklar. Bekleyen yazarlara öncelik verir; yazarlar ilerlediği sürece açlık riskini azaltabilir. | Okuma yoğun sistemlerde yazarların ezilmesini engellemek için. |
 | **Okur Öncelikli** | `RWLockRead` / `AsyncRWLockRead` | Yazarlar beklese bile yeni okuyucuları sürekli içeri alır. Maksimum paralellik sağlar. | Yazma işlemlerinin çok nadir veya önemsiz olduğu önbellek (cache) yapılarında. |
 | **Okuyucu-Faz Adil** | `RWLockReaderPhaseFair` / `AsyncRWLockReaderPhaseFair` | Okuyucu ve yazar fazları arasında geçiş yapar, ancak açık bir okuyucu fazı başladıktan sonra geç gelen okuyucular da daha yüksek okuma throughput'u için o faza katılabilir. | Her okuyucu grubunu tamamen dondurmadan, sınırlı adalet ile yüksek okuma verimi istediğinizde. |
 | **Adil (Fair)** | `RWLockFair` / `AsyncRWLockFair` | Her okuyucu fazının üyeliğini faz başında dondurur; böylece geç gelen okuyucular sıradaki yazarı kesemez. Kilit sahipleri ilerlediği sürece aç kalma riskini azaltmak üzere tasarlanmıştır. | Sıralı yazar erişiminin önemli olduğu çift yönlü trafiklerde. |
@@ -266,7 +266,7 @@ class AuthTokenManager:
 
 #### 4. Yüksek Frekanslı Telemetri (Adil Dağıtım)
 
-Sensörden saniyede 100 kere veri geliyor (Yazma), ve 200 adet WebSocket bu veriyi okuyor (Okuma). Fair mimarisi iki tarafın da kilitlenmesini engeller.
+Sensörden saniyede 100 kere veri geliyor (Yazma), ve 200 adet WebSocket bu veriyi okuyor (Okuma). Fair mimarisi, kilit sahipleri ilerlemeye devam ettiği sürece açlık riskini azaltmayı amaçlar.
 
 ```python
 import asyncio
@@ -275,7 +275,7 @@ from rwlocker.async_rwlock import AsyncRWLockFair
 
 class TelemetryDispatcher:
     def __init__(self):
-        # Fair (Adil Kilit), okuma ve yazma yoğunluğunun birbirini boğmasını engeller.
+        # Fair, kilit sahipleri ilerlerken bekleyen okuyucu ve yazarları fazlar hâlinde zamanlar.
         self._lock = AsyncRWLockFair()
         self._state = {"alt": 0.0, "lat": 0.0, "lon": 0.0}
 
@@ -354,7 +354,7 @@ from rwlocker.thread_rwlock import RWLockFair, RWCondition
 
 class ImageProcessingQueue:
     def __init__(self):
-        # Üretici ve Tüketicilerin birbirini ezmemesi için adil Fair stratejisi
+        # Bekleyen üretici ve tüketicileri fazlar hâlinde zamanlamak için Fair stratejisi
         self._cond = RWCondition(RWLockFair())
         self._queue = deque()
 

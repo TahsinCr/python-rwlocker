@@ -154,20 +154,17 @@ class BenchmarkPlotter:
         
         df = pd.DataFrame(rows)
         
-        # Recalculate speedup for sync categories relative to the standard Python baseline
+        # Recalculate synchronous speedups against each environment's own baseline.
         for category in ["SyncLock", "SyncCond"]:
             for scenario in df["Scenario"].unique():
-                mask = (df["Category"] == category) & (df["Scenario"] == scenario)
-                if not mask.any():
-                    continue
-                
-                # Compare implementations within the same interpreter environment.
-                environment = df.loc[mask, "Environment"].iloc[0]
-                baseline_mask = mask & (df["Environment"] == environment) & df["Name"].str.contains("Baseline")
-                    
-                if baseline_mask.any():
-                    baseline_time = df.loc[baseline_mask, "Elapsed"].values[0]
-                    df.loc[mask, "Speedup"] = baseline_time / df.loc[mask, "Elapsed"]
+                scenario_mask = (df["Category"] == category) & (df["Scenario"] == scenario)
+                environments = df.loc[scenario_mask, "Environment"].dropna().unique()
+                for environment in environments:
+                    mask = scenario_mask & (df["Environment"] == environment)
+                    baseline_mask = mask & df["Name"].str.contains("Baseline", na=False)
+                    if baseline_mask.any():
+                        baseline_time = df.loc[baseline_mask, "Elapsed"].iloc[0]
+                        df.loc[mask, "Speedup"] = baseline_time / df.loc[mask, "Elapsed"]
 
         return df
 
