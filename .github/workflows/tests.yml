@@ -37,10 +37,12 @@ jobs:
 
           sys.path.insert(0, "wheel-install")
           from importlib.metadata import distribution
+          import tomllib
           import rwlocker
 
           package = distribution("rwlocker")
-          assert package.version == "3.4.1", package.version
+          project_version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          assert package.version == project_version, (package.version, project_version)
           assert rwlocker.__version__ == package.version
           assert "Development Status :: 4 - Beta" in package.metadata.get_all("Classifier")
           assert "benchmark" in (package.metadata.get_all("Provides-Extra") or [])
