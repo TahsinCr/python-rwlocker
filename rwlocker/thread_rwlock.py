@@ -37,7 +37,7 @@ from .queues import (
     ThreadConditionQueue
 )
 
-__version__ = '3.4.1'
+__version__ = '3.4.2'
 __all__ = (
     'Lockable', 'LockDowngradable', 
     'RWLockBase', 'RWLockWithProxyBase',
@@ -63,7 +63,8 @@ class RWLockProxy:
     """
     __slots__ = (
         '_lock', 'those_waiting', 'condition', '_can_acquire',
-        '_acquire_core', '_release_core', '_on_abort', '_is_locked', '_waiter_seq'
+        '_acquire_core', '_release_core', '_on_abort', '_is_locked', '_waiter_seq',
+        '_before_acquire'
     )  
     def __init__(self, 
         lock: threading.Lock, 
@@ -72,6 +73,7 @@ class RWLockProxy:
         release_core:Callable[[],None],
         on_abort:Callable[...,None],
         is_locked:Callable[[],bool],
+        before_acquire: Optional[Callable[[], None]] = None,
     ):
         self._lock = lock
         self.those_waiting = 0
@@ -83,6 +85,7 @@ class RWLockProxy:
         self._on_abort = on_abort
         self._is_locked = is_locked
         self._waiter_seq = 0
+        self._before_acquire = before_acquire
 
     def acquire(self, blocking: bool = True, timeout: float = -1.0) -> bool:
         """
@@ -96,6 +99,8 @@ class RWLockProxy:
             bool: True if lock was acquired, False otherwise.
         """
         with self._lock:
+            if self._before_acquire is not None:
+                self._before_acquire()
             if self._can_acquire(False, None):
                 self._acquire_core(False, None)
                 return True
@@ -172,7 +177,8 @@ class RWLockWriterProxy(RWLockProxy):
             acquire_core=rwlock._acquire_write_core,
             release_core=rwlock._release_write_core,
             on_abort=rwlock._on_writer_abort,
-            is_locked=rwlock._is_write_locked
+            is_locked=rwlock._is_write_locked,
+            before_acquire=rwlock._check_write_acquire_allowed,
         )
         self._read_lock = rwlock.read
         self._downgrade_core = rwlock._downgrade_core
@@ -256,6 +262,13 @@ class RWLockWithProxyBase(RWLockBase):
         if hasattr(self, "_writer_id"):
             return self._writer_id == threading.get_ident()
         return self._writer_owner is self._current_reader_owner()
+
+    def _check_write_acquire_allowed(self) -> None:
+        if self._is_current_reader() and not self._is_current_writer():
+            raise RuntimeError(
+                "Read-to-write upgrade is not supported; release the read lock "
+                "before acquiring the write lock"
+            )
 
     @abstractmethod
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool: ...
@@ -414,7 +427,8 @@ class RWLockReadReentrantWriter(
     Read-preferring Read-Write Lock with Write-Reentrancy support.
     
     Reentrancy Note:
-        Supports nested *write* locks exclusively.
+        The owning thread can nest write acquisitions and acquire read locks.
+        Read-to-write upgrades are rejected to avoid self-deadlocks.
     
     Example:
         ```python
@@ -741,7 +755,7 @@ class RWConditionProxy:
         waiter = self._add_waiter()
         try:
             self.release()
-        except Exception:
+        except BaseException:
             self._remove_waiter(waiter)
             raise
         

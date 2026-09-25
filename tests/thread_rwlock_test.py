@@ -153,10 +153,44 @@ class RWLockTests(BaseLockTests):
     def test_reader_blocks_writer(self):
         self.assertTrue(self.lock.read.acquire())
         
-        write_success = self.lock.write.acquire(blocking=False)
-        self.assertFalse(write_success, "A writer cannot enter while a reader is present.")
+        with self.assertRaisesRegex(RuntimeError, "Read-to-write upgrade is not supported"):
+            self.lock.write.acquire(blocking=False)
         
         self.lock.read.release()
+
+    def test_current_reader_can_reacquire_while_writer_waits(self):
+        self.assertTrue(self.lock.read.acquire())
+        writer_acquired = threading.Event()
+
+        def writer():
+            with self.lock.write:
+                writer_acquired.set()
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        recursive_acquired = False
+        try:
+            self._wait_for_waiters(writers=1)
+            recursive_acquired = self.lock.read.acquire(timeout=0.5)
+            self.assertTrue(recursive_acquired)
+        finally:
+            if recursive_acquired:
+                self.lock.read.release()
+            self.lock.read.release()
+            thread.join(timeout=1.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(writer_acquired.is_set())
+
+    def test_read_to_write_upgrade_fails_fast(self):
+        self.assertTrue(self.lock.read.acquire())
+        try:
+            with self.assertRaisesRegex(RuntimeError, "Read-to-write upgrade is not supported"):
+                self.lock.write.acquire()
+            self.assertTrue(self.lock.read.locked())
+            self.assertFalse(self.lock.write.locked())
+        finally:
+            self.lock.read.release()
 
     def test_downgrade_functionality(self):
         self.lock.write.acquire()
@@ -165,7 +199,8 @@ class RWLockTests(BaseLockTests):
         self.assertTrue(self.lock.read.acquire(blocking=False))
         self.lock.read.release()
    
-        self.assertFalse(self.lock.write.acquire(blocking=False))
+        with self.assertRaisesRegex(RuntimeError, "Read-to-write upgrade is not supported"):
+            self.lock.write.acquire(blocking=False)
 
         self.lock.read.release()
         self.assertFalse(self.lock.read.locked())

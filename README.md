@@ -43,7 +43,7 @@ Standard locks in Python (`Lock`, `RLock`) are **Exclusive** locks. Even if 100 
 * **Both Thread and Asyncio Support:** You can manage both standard OS threads (`rwlocker.thread_rwlock`) and event-loop based tasks (`rwlocker.async_rwlock`) using corresponding synchronous and asynchronous interfaces.
 * **Smart Proxy Architecture:** Intuitive usage of `with` and `async with` context managers via `.read` and `.write` proxies.
 * **Atomic Downgrading:** The ability to instantly downgrade a Write lock to a Read lock (`downgrade()`) without completely releasing the lock, preventing other writers from slipping in.
-* **Writer Reentrancy:** `ReentrantWriter` variants allow the owning thread or task to acquire nested write locks and a read lock; other readers join only after `.downgrade()` opens shared access.
+* **Writer Reentrancy:** `ReentrantWriter` variants allow the owning thread or task to acquire nested write locks and a read lock; other readers join only after `.downgrade()` opens shared access. A current reader may reacquire `.read` while writers wait; acquiring `.write` while holding `.read` raises `RuntimeError` to prevent self-deadlock.
 * **Queued Condition Waiters:** Waiters are stored in FIFO deques. Normal enqueue/dequeue operations are amortized O(1); notifying all waiters and removing an arbitrary timed-out waiter are O(N).
 * **Async Cancellation Cleanup:** Cancellation removes a task's waiter and condition waits reacquire the associated lock before propagating cancellation.
 * **Lock-Style Interface:** Direct lock operations use the exclusive `.write` proxy. Shared locking is available through `.read`; some signatures and observable behavior differ from the standard lock classes, so compatibility should be checked for each integration.
@@ -76,7 +76,7 @@ Set `RWLOCKER_PYTHON_STANDARD` and `RWLOCKER_PYTHON_FREE_THREADED` to choose int
 2. **Circular References:**
 Lock classes establish a circular reference graph (Lock -> Proxy -> Lock) when creating smart proxy objects (`.read` and `.write`). This design is intentional. Memory cleanup (Garbage Collection) is safely handled by Python's Cyclic GC engine, not by `__del__`.
 3. **Reentrant Writer Behavior:**
-`ReentrantWriter` variants allow the owning thread/task to acquire nested write locks and a read lock. Other readers can join only after `.downgrade()` opens shared access.
+`ReentrantWriter` variants allow the owning thread/task to acquire nested write locks and a read lock. Other readers can join only after `.downgrade()` opens shared access. A current reader may reacquire `.read` while writers wait; acquiring `.write` while holding `.read` raises `RuntimeError` to prevent self-deadlock.
 4. **The Cost of Fairness:**
 The `Fair` strategy schedules queued readers and writers in phases to reduce starvation while participants continue making progress. This ordering can reduce throughput in some workloads. In the recorded condition workload, the Fair variant was slower than the exclusive-lock standard `threading.Condition` baseline; that comparison includes different locking semantics and does not isolate fairness overhead.
 5. **Condition Queue Costs:**

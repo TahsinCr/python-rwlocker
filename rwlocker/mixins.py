@@ -14,7 +14,9 @@ class _RWLockWriteMixin:
 
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         del waiting, waiter_seq
-        return not self._writer_active and self.write.those_waiting == 0
+        return not self._writer_active and (
+            self._is_current_reader() or self.write.those_waiting == 0
+        )
 
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
@@ -166,6 +168,8 @@ class _RWLockReaderPhaseFairMixin:
         del waiting, waiter_seq
         if self._writer_active:
             return False
+        if self._is_current_reader():
+            return True
         return self._readers_turn or self.write.those_waiting == 0
 
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
@@ -274,6 +278,8 @@ class _RWLockFairMixin:
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         if self._writer_active:
             return False
+        if self._is_current_reader():
+            return True
         if self._readers_turn:
             if self.write.those_waiting == 0:
                 return True
@@ -359,7 +365,7 @@ class _RWLockWriteReentrantWriterMixin(_RWLockReentrantWriterCoreMixin):
         del waiting, waiter_seq
         if self._writer_id is not None:
             return self._is_current_writer()
-        return self.write.those_waiting == 0
+        return self._is_current_reader() or self.write.those_waiting == 0
 
     def _can_write(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         del waiting, waiter_seq
@@ -399,6 +405,8 @@ class _RWLockReaderPhaseFairReentrantWriterMixin(_RWLockReentrantWriterCoreMixin
         del waiting, waiter_seq
         if self._writer_id is not None:
             return self._is_current_writer()
+        if self._is_current_reader():
+            return True
         return self._readers_turn or self.write.those_waiting == 0
 
     def _can_write(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
@@ -422,6 +430,8 @@ class _RWLockFairReentrantWriterMixin(_RWLockReentrantWriterCoreMixin):
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         if self._writer_id is not None:
             return self._is_current_writer()
+        if self._is_current_reader():
+            return True
         if self._readers_turn:
             if self.write.those_waiting == 0:
                 return True

@@ -1,6 +1,7 @@
 import unittest
 import threading
 import time
+from unittest.mock import patch
 from typing import Type
 
 from rwlocker.thread_rwlock import (
@@ -233,6 +234,17 @@ class RWConditionTests(BaseConditionTests):
             self.assertEqual(len(self.condition._queue._waiters), 0)
         finally:
             proxy.release()
+            proxy.release()
+
+    def test_waiter_is_removed_if_release_is_interrupted(self):
+        proxy = self.condition.read
+        proxy.acquire()
+        try:
+            with patch.object(type(proxy), "release", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    proxy.wait(timeout=0)
+            self.assertEqual(len(self.condition._queue._waiters), 0)
+        finally:
             proxy.release()
 
     def test_wait_rejects_nested_write_acquisitions(self):

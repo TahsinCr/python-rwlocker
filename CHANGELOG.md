@@ -1,7 +1,20 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
-## **[3.4.1] - 24.09.2026**
+## **[3.4.2] - 25.09.2026**
+The **"RWLock Ownership Safety"** patch closes self-deadlocks in recursive reader acquisition and read-to-write upgrades.
+
+### Fixed
+* Allow a current reader to acquire the read lock recursively while writers are waiting, without letting new readers bypass the selected strategy.
+* Reject read-to-write upgrades immediately with `RuntimeError` in synchronous and asynchronous locks.
+* Remove condition waiters if synchronous lock release is interrupted by any `BaseException`.
+* Correct reentrant-writer documentation and describe ownership constraints in all README translations.
+* Increase async benchmark figure height to twice the original layout so bar-end labels have enough vertical separation.
+
+### Validation
+* All 510 tests passed on Python 3.14.7 (15 skipped); the sdist and wheel built, and `twine check` passed for both.
+
+## **[3.4.1] - 25.09.2026**
 The **"Condition Wait Safety & Release Metadata"** patch release closes a deadlock edge case in reentrant condition waits, corrects per-interpreter benchmark speedups, and aligns package metadata and CI checks with the published installation instructions.
 
 ### Fixed

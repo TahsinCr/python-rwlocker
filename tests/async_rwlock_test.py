@@ -138,10 +138,50 @@ class AsyncRWLockTests(BaseAsyncLockTests):
     async def test_reader_blocks_writer(self):
         self.assertTrue(await self.lock.read.acquire())
         
-        write_success = await self.lock.write.acquire(blocking=False)
-        self.assertFalse(write_success, "A writer cannot enter while a reader is present.")
+        with self.assertRaisesRegex(RuntimeError, "Read-to-write upgrade is not supported"):
+            await self.lock.write.acquire(blocking=False)
         
         self.lock.read.release()
+
+    async def test_current_reader_can_reacquire_while_writer_waits(self):
+        self.assertTrue(await self.lock.read.acquire())
+        writer_acquired = asyncio.Event()
+
+        async def writer():
+            async with self.lock.write:
+                writer_acquired.set()
+
+        task = asyncio.create_task(writer())
+        recursive_acquired = False
+        timeout_handle = None
+        try:
+            await self._wait_for_waiters(writers=1)
+            current_task = asyncio.current_task()
+            timeout_handle = asyncio.get_running_loop().call_later(0.5, current_task.cancel)
+            try:
+                recursive_acquired = await self.lock.read.acquire()
+            except asyncio.CancelledError:
+                self.fail("Recursive read acquisition blocked behind a waiting writer")
+            self.assertTrue(recursive_acquired)
+        finally:
+            if timeout_handle is not None:
+                timeout_handle.cancel()
+            if recursive_acquired:
+                self.lock.read.release()
+            self.lock.read.release()
+            await asyncio.wait_for(task, timeout=1.0)
+
+        self.assertTrue(writer_acquired.is_set())
+
+    async def test_read_to_write_upgrade_fails_fast(self):
+        self.assertTrue(await self.lock.read.acquire())
+        try:
+            with self.assertRaisesRegex(RuntimeError, "Read-to-write upgrade is not supported"):
+                await self.lock.write.acquire()
+            self.assertTrue(self.lock.read.locked())
+            self.assertFalse(self.lock.write.locked())
+        finally:
+            self.lock.read.release()
 
     async def test_downgrade_functionality(self):
         await self.lock.write.acquire()
@@ -150,7 +190,8 @@ class AsyncRWLockTests(BaseAsyncLockTests):
         self.assertTrue(await self.lock.read.acquire(blocking=False))
         self.lock.read.release()
    
-        self.assertFalse(await self.lock.write.acquire(blocking=False))
+        with self.assertRaisesRegex(RuntimeError, "Read-to-write upgrade is not supported"):
+            await self.lock.write.acquire(blocking=False)
 
         self.lock.read.release()
         self.assertFalse(self.lock.read.locked())

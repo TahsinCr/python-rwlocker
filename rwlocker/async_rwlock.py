@@ -37,7 +37,7 @@ from .queues import (
     AsyncConditionQueue
 )
 
-__version__ = '3.4.1'
+__version__ = '3.4.2'
 __all__ = (
     'AsyncLockable', 'AsyncLockDowngradable', 
     'AsyncRWLockBase', 'AsyncRWLockWithProxyBase', 
@@ -63,7 +63,8 @@ class AsyncRWLockProxy:
     """
     __slots__ = (
         'those_waiting', 'condition', '_can_acquire',
-        '_acquire_core', '_release_core', '_on_abort', '_is_locked', '_waiter_seq'
+        '_acquire_core', '_release_core', '_on_abort', '_is_locked', '_waiter_seq',
+        '_before_acquire'
     )  
     def __init__(self,  
         can_acquire: Callable[..., bool],
@@ -71,6 +72,7 @@ class AsyncRWLockProxy:
         release_core: Callable[[], None],
         on_abort: Callable[..., None],
         is_locked: Callable[[], bool],
+        before_acquire: Optional[Callable[[], None]] = None,
     ):
         self.those_waiting = 0
         self.condition = AsyncWaitQueue(lambda: asyncio.get_running_loop().create_future())
@@ -81,6 +83,7 @@ class AsyncRWLockProxy:
         self._on_abort = on_abort
         self._is_locked = is_locked
         self._waiter_seq = 0
+        self._before_acquire = before_acquire
 
     async def acquire(self, blocking: bool = True) -> bool:
         """
@@ -91,6 +94,8 @@ class AsyncRWLockProxy:
             the `finally` block ensures the wait counter is decremented and other
             tasks are properly notified via `_on_abort()`.
         """
+        if self._before_acquire is not None:
+            self._before_acquire()
         if self._can_acquire(False, None):
             self._acquire_core(False, None)
             return True
@@ -151,7 +156,8 @@ class AsyncRWLockWriterProxy(AsyncRWLockProxy):
             acquire_core=rwlock._acquire_write_core,
             release_core=rwlock._release_write_core,
             on_abort=rwlock._on_writer_abort,
-            is_locked=rwlock._is_write_locked
+            is_locked=rwlock._is_write_locked,
+            before_acquire=rwlock._check_write_acquire_allowed,
         )
         self._read_lock = rwlock.read
         self._downgrade_core = rwlock._downgrade_core
@@ -231,6 +237,13 @@ class AsyncRWLockWithProxyBase(AsyncRWLockBase):
         if hasattr(self, "_writer_id"):
             return self._writer_id is self._current_reader_owner()
         return self._writer_owner is self._current_reader_owner()
+
+    def _check_write_acquire_allowed(self) -> None:
+        if self._is_current_reader() and not self._is_current_writer():
+            raise RuntimeError(
+                "Read-to-write upgrade is not supported; release the read lock "
+                "before acquiring the write lock"
+            )
 
     @abstractmethod
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool: ...
@@ -388,7 +401,8 @@ class AsyncRWLockReadReentrantWriter(_RWLockReadReentrantWriterMixin, AsyncRWLoc
     Read-preferring Asynchronous Read-Write Lock with Task-Reentrancy.
     
     Reentrancy Note:
-        Strictly supports nested *write* locks for the current `asyncio.Task`.
+        The owning task can nest write acquisitions and acquire read locks.
+        Read-to-write upgrades are rejected to avoid self-deadlocks.
 
     Example:
         ```python

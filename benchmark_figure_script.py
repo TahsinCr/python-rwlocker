@@ -319,8 +319,8 @@ class BenchmarkPlotter:
         async_df = self.df[self.df["Category"].str.startswith("Async")]
         if not async_df.empty:
             plot_configs_async = [
-                {"category": "AsyncLock", "filename": "async_rwlock.svg", "palette_name": "crest", "height": 9.0, "aspect": 11.0/9.0},
-                {"category": "AsyncCond", "filename": "async_rwcondition.svg", "palette_name": "flare", "height": 5.5, "aspect": 11.0/5.5},
+                {"category": "AsyncLock", "filename": "async_rwlock.svg", "palette_name": "crest", "height": 18.0, "aspect": 11.0/18.0},
+                {"category": "AsyncCond", "filename": "async_rwcondition.svg", "palette_name": "flare", "height": 11.0, "aspect": 11.0/11.0},
             ]
             
             for config in plot_configs_async:

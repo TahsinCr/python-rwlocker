@@ -74,11 +74,11 @@ Geliştiricilerin bu kütüphaneyi kullanırken bilmesi gereken mühendislik ger
 2. **Circular References (Döngüsel Referanslar):**
 Kilit sınıfları, akıllı proxy nesneleri (`.read` ve `.write`) oluştururken döngüsel bir referans grafiği (Lock -> Proxy -> Lock) kurar. Bu tasarım bilerek seçilmiştir. Bellek temizliği (Garbage Collection) `__del__` ile değil, Python'un Cyclic GC motoru tarafından güvenle halledilir.
 3. **Strict Nested Write Locks:**
-`ReentrantWriter` varyantlarında aynı thread/task iç içe yazma kilitleri alabilir ve yazarken ayrıca okuma kilidi edinebilir. Diğer okuyucuların katılması için `.downgrade()` ile paylaşımlı erişim açılmalıdır.
+`ReentrantWriter` varyantlarında aynı thread/task iç içe yazma kilitleri alabilir ve yazarken ayrıca okuma kilidi edinebilir. Diğer okuyucuların katılması için `.downgrade()` ile paylaşımlı erişim açılmalıdır. Mevcut bir okuyucu, yazarlar beklerken `.read` kilidini tekrar alabilir; `.read` tutulurken `.write` almaya çalışmak self-deadlock riskini önlemek için `RuntimeError` üretir.
 4. **Adaletin Bedeli (The Cost of Fairness):**
  `Fair` stratejisi, katılımcılar ilerlemeye devam ederken aç kalma riskini azaltmak için bekleyen okuyucu ve yazarları fazlar hâlinde sıraya koyar. Bu sıralama bazı iş yüklerinde throughput’u düşürebilir. Kaydedilen condition iş yükünde Fair, dışlayıcı kilit kullanan standart `threading.Condition` temel çizgisinden yavaştı; bu karşılaştırma farklı kilit semantiğini içerir ve fairness maliyetini tek başına ölçmez.
 5. **Condition Bellek Maliyeti (Memory vs CPU Trade-off):**
-`rwlocker` her bekleyen thread/task için bir waiter nesnesi tutar. `notify_all()` her waiter’ı sinyaller ve O(N) sürer; belirli bir waiter’ı iptal/zaman aşımında kaldırma da O(N) olabilir. Bellek kullanımı bekleyen sayısıyla artar.
+`rwlocker` her bekleyen thread/task için bir waiter nesnesi tutar. `notify_all()` her waiter’ı sinyaller ve O(N) sürer; belirli bir waiter’ı iptal/zaman aşımında kaldırma da O(N) olabilir. Bellek kullanımı bekleyen sayısıyla artar. `Condition.wait()` tek bir edinim gerektirir; iç içe edinimler `RuntimeError` üretir.
 6. **Dışlayıcı Varsayılan:**
 Doğrudan kilit işlemleri (ör. `with lock:`) dışlayıcı `.write` proxy’sini kullanır. Bu bir eşzamanlılık varsayılanıdır, güvenlik sınırı değildir; erişim modu önemliyse `.read` veya `.write` kullanın.
 
