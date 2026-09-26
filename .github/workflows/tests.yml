@@ -18,6 +18,37 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m unittest discover -s tests -p '*_test.py'
 
+  platform-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.14t"
+          - os: windows-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.14"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify free-threaded runtime
+        if: matrix.python-version == '3.14t'
+        env:
+          PYTHON_GIL: "0"
+        run: python -c "import sys; assert not sys._is_gil_enabled()"
+      - name: Run free-threaded tests
+        if: matrix.python-version == '3.14t'
+        env:
+          PYTHON_GIL: "0"
+        run: python -m unittest discover -s tests -p '*_test.py'
+      - name: Run platform tests
+        if: matrix.python-version != '3.14t'
+        run: python -m unittest discover -s tests -p '*_test.py'
+
   package:
     runs-on: ubuntu-latest
     steps:

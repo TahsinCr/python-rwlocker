@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sys
+import argparse
 import json
 import asyncio
 from typing import List
@@ -10,7 +10,8 @@ import rwlocker
 from benchmarks.benchmark_base import BenchmarkConfig, BenchmarkDataHandler
 from benchmarks.benchmark_scenario import (
     BaseScenario, AsyncBaseScenario, 
-    IOBoundScenario, AsyncIOBoundScenario
+    IOBoundScenario, AsyncIOBoundScenario,
+    PureOverheadScenario, AsyncPureOverheadScenario
 )
 from benchmarks import (
     thread_rwlock_benchmark, 
@@ -82,17 +83,20 @@ class BenchmarkDataCollector:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        target_path = Path(sys.argv[1])
-    else:
-        target_path = Path.cwd().joinpath('figures','test_data.json')
-        
+    parser = argparse.ArgumentParser(description="Collect RWLock benchmark data")
+    parser.add_argument("output", nargs="?", type=Path, default=Path("figures/test_data.json"))
+    parser.add_argument("--profile", choices=("io", "overhead"), default="io")
+    args = parser.parse_args()
+    target_path = args.output
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     collector = BenchmarkDataCollector(target_path)
+    if args.profile == "overhead":
+        sync_scenarios = [PureOverheadScenario(iterations=1_000)]
+        async_scenarios = [AsyncPureOverheadScenario(iterations=1_000)]
+    else:
+        sync_scenarios = [IOBoundScenario()]
+        async_scenarios = [AsyncIOBoundScenario()]
     collector.collect(
-        sync_scenarios=[
-            IOBoundScenario()
-        ], 
-        async_scenarios=[
-            AsyncIOBoundScenario()
-        ]
+        sync_scenarios=sync_scenarios,
+        async_scenarios=async_scenarios,
     )

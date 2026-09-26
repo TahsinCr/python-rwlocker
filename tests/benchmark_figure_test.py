@@ -61,6 +61,28 @@ class BenchmarkFigureTests(unittest.TestCase):
                 self.assertEqual(len(target), 1)
                 self.assertAlmostEqual(target.iloc[0]["Speedup"], expected)
 
+    @unittest.skipUnless(HAS_PLOT_DEPENDENCIES, "install rwlocker[benchmark] to run plotting tests")
+    def test_sync_speedup_uses_fastest_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            history = [{
+                "scenario_name": "IOBoundScenario",
+                "readers": 2,
+                "writers": 1,
+                "iterations": 3,
+                "target_type": "Lock Implementation",
+                "results": [
+                    {"name": "threading.Lock (C-Baseline)", "elapsed": 10.0, "throughput": 1.0, "speedup": 1.0},
+                    {"name": "threading.RLock (C-Baseline)", "elapsed": 9.5, "throughput": 1.0, "speedup": 1.0},
+                    {"name": "RWLockFair", "elapsed": 5.0, "throughput": 2.0, "speedup": 1.9},
+                ],
+            }]
+            (data_dir / "python3.14_standard.json").write_text(json.dumps(history), encoding="utf-8")
+            plotter = BenchmarkPlotter(data_dir)
+            target = plotter.df[plotter.df["Name"].str.contains("RWLockFair")]
+            self.assertEqual(len(target), 1)
+            self.assertAlmostEqual(target.iloc[0]["Speedup"], 9.5 / 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

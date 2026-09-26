@@ -205,6 +205,27 @@ class RWLockTests(BaseLockTests):
         self.lock.read.release()
         self.assertFalse(self.lock.read.locked())
 
+    def test_foreign_owner_cannot_downgrade(self):
+        errors = []
+        self.lock.write.acquire()
+        try:
+            worker = threading.Thread(target=lambda: self._attempt_foreign_downgrade(errors))
+            worker.start()
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertTrue(self.lock.write.locked())
+            self.assertFalse(self.lock.read.locked())
+        finally:
+            self.lock.write.release()
+
+    def _attempt_foreign_downgrade(self, errors):
+        try:
+            self.lock.write.downgrade()
+        except BaseException as exc:
+            errors.append(exc)
+
     def test_writer_downgrade_wakes_readers(self):
         self.lock.write.acquire()
         
@@ -536,6 +557,32 @@ class TestLock(BaseLockTests, unittest.TestCase):
 class TestRLock(BaseLockTests, unittest.TestCase):
     lock_class = Lock
     lock_inner = threading.RLock
+
+    def test_public_locked_with_rlock(self):
+        self.assertFalse(self.lock.locked())
+        with self.lock:
+            self.assertTrue(self.lock.locked())
+        self.assertFalse(self.lock.locked())
+
+    def test_public_locked_when_another_thread_owns_rlock(self):
+        acquired = threading.Event()
+        release = threading.Event()
+
+        def hold_lock():
+            with self.lock:
+                acquired.set()
+                release.wait(timeout=2)
+
+        worker = threading.Thread(target=hold_lock)
+        worker.start()
+        try:
+            self.assertTrue(acquired.wait(timeout=2))
+            self.assertTrue(self.lock.locked())
+        finally:
+            release.set()
+            worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(self.lock.locked())
 
 
 class TestRWLockConstructorInjection(unittest.TestCase):

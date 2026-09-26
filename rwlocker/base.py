@@ -26,6 +26,20 @@ __all__ = (
 )
 
 # protocols
+def _thread_lock_is_locked(lock: Lockable) -> bool:
+    """Support pre-3.14 RLock/Condition instances without ``locked()``."""
+    locked = getattr(lock, "locked", None)
+    if locked is not None:
+        return locked()
+    is_owned = getattr(lock, "_is_owned", None)
+    if is_owned is not None and is_owned():
+        return True
+    if lock.acquire(False):
+        lock.release()
+        return False
+    return True
+
+
 class Lockable(Protocol):
     """Standard thread-safe lock interface."""
 
@@ -119,10 +133,10 @@ class RWLockBase(ABC):
         self.write:Lockable = self._lock
     
     def _is_write_locked(self) -> bool:
-        return self.write.locked()
+        return _thread_lock_is_locked(self.write)
 
     def _is_read_locked(self) -> bool:
-        return self.read.locked()
+        return _thread_lock_is_locked(self.read)
     
     def acquire(self, blocking: bool = True, timeout: float = -1.0) -> bool:
         """
@@ -141,7 +155,7 @@ class RWLockBase(ABC):
         """
         Check if the exclusive (write) lock is currently held.
         """
-        return self.write.locked()
+        return _thread_lock_is_locked(self.write)
     
     def __enter__(self) -> bool:
         return self.write.__enter__()
@@ -223,7 +237,7 @@ class RWConditionBase(ABC):
         """
         Check if the underlying exclusive (write) lock is currently held.
         """
-        return self.write.locked()
+        return _thread_lock_is_locked(self._lock)
     
     def wait(self, timeout: Optional[float] = None) -> bool:
         """

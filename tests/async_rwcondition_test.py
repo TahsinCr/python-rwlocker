@@ -5,6 +5,7 @@ from typing import Type
 from rwlocker.async_rwlock import (
     AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
     AsyncRWLockRead, AsyncRWLockReadReentrantWriter,
+    AsyncRWLockReaderPhaseFair, AsyncRWLockReaderPhaseFairReentrantWriter,
     AsyncRWLockFair, AsyncRWLockFairReentrantWriter,
     AsyncRWLockBase, AsyncRWCondition, AsyncCondition
 )
@@ -180,6 +181,18 @@ class AsyncRWConditionTests(BaseAsyncConditionTests):
             self.lock = self.lock_class()
             self.condition = AsyncRWCondition(self.lock)
 
+    async def test_foreign_owner_cannot_downgrade_condition(self):
+        await self.condition.write.acquire()
+        try:
+            async def foreign_downgrade():
+                self.condition.write._lock_proxy.downgrade()
+
+            with self.assertRaisesRegex(RuntimeError, "Permission denied"):
+                await asyncio.create_task(foreign_downgrade())
+            self.assertTrue(self.condition.write.locked())
+        finally:
+            self.condition.write.release()
+
     async def test_wait_rejects_nested_read_acquisitions(self):
         proxy = self.condition.read
         await proxy.acquire()
@@ -248,6 +261,12 @@ class TestAsyncRWConditionWithReadReentrantLock(AsyncRWConditionTests, unittest.
 
 class TestAsyncRWConditionWithFairLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockFair
+
+class TestAsyncRWConditionWithReaderPhaseFairLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = AsyncRWLockReaderPhaseFair
+
+class TestAsyncRWConditionWithReaderPhaseFairReentrantLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
+    lock_class = AsyncRWLockReaderPhaseFairReentrantWriter
 
 class TestAsyncRWConditionWithFairReentrantLock(AsyncRWConditionTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockFairReentrantWriter

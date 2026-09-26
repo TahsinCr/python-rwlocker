@@ -37,7 +37,7 @@ from .queues import (
     ThreadConditionQueue
 )
 
-__version__ = '3.4.2'
+__version__ = '3.4.3'
 __all__ = (
     'Lockable', 'LockDowngradable', 
     'RWLockBase', 'RWLockWithProxyBase',
@@ -264,7 +264,7 @@ class RWLockWithProxyBase(RWLockBase):
         return self._writer_owner is self._current_reader_owner()
 
     def _check_write_acquire_allowed(self) -> None:
-        if self._is_current_reader() and not self._is_current_writer():
+        if self._readers_active > 0 and self._is_current_reader() and not self._is_current_writer():
             raise RuntimeError(
                 "Read-to-write upgrade is not supported; release the read lock "
                 "before acquiring the write lock"

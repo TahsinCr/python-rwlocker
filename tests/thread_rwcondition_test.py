@@ -7,6 +7,7 @@ from typing import Type
 from rwlocker.thread_rwlock import (
     RWLockWrite, RWLockWriteReentrantWriter,
     RWLockRead, RWLockReadReentrantWriter,
+    RWLockReaderPhaseFair, RWLockReaderPhaseFairReentrantWriter,
     RWLockFair, RWLockFairReentrantWriter,
     RWLockBase, RWCondition, Condition
 )
@@ -223,6 +224,26 @@ class RWConditionTests(BaseConditionTests):
             self.lock = self.lock_class()
             self.condition = RWCondition(self.lock)
 
+    def test_foreign_owner_cannot_downgrade_condition(self):
+        errors = []
+        self.condition.write.acquire()
+        try:
+            def foreign_downgrade():
+                try:
+                    self.condition.write._lock_proxy.downgrade()
+                except BaseException as exc:
+                    errors.append(exc)
+
+            worker = threading.Thread(target=foreign_downgrade)
+            worker.start()
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertTrue(self.condition.write.locked())
+        finally:
+            self.condition.write.release()
+
     def test_wait_rejects_nested_read_acquisitions(self):
         proxy = self.condition.read
         proxy.acquire()
@@ -307,11 +328,23 @@ class TestRWConditionWithReadReentrantLock(RWConditionTests, unittest.TestCase):
 class TestRWConditionWithFairLock(RWConditionTests, unittest.TestCase):
     lock_class = RWLockFair
 
+class TestRWConditionWithReaderPhaseFairLock(RWConditionTests, unittest.TestCase):
+    lock_class = RWLockReaderPhaseFair
+
+class TestRWConditionWithReaderPhaseFairReentrantLock(RWConditionTests, unittest.TestCase):
+    lock_class = RWLockReaderPhaseFairReentrantWriter
+
 class TestRWConditionWithFairReentrantLock(RWConditionTests, unittest.TestCase):
     lock_class = RWLockFairReentrantWriter
 
 class TestCondition(BaseConditionTests, unittest.TestCase):
     lock_class = threading.Lock
+
+    def test_public_locked_with_standard_condition(self):
+        self.assertFalse(self.condition.locked())
+        with self.condition:
+            self.assertTrue(self.condition.locked())
+        self.assertFalse(self.condition.locked())
 
 if __name__ == '__main__':
     unittest.main()

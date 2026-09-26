@@ -113,7 +113,7 @@ class PureOverheadScenario(BaseScenario):
         self.shared_counter = 0
 
     def get_name(self):
-        return "Pure Overhead (High Contention & Zero-Sleep)"
+        return "Pure Overhead (Zero-Sleep Workload)"
     
     def execute_read(self, worker_id: int):
         _ = self.shared_counter

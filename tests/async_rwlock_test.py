@@ -196,6 +196,19 @@ class AsyncRWLockTests(BaseAsyncLockTests):
         self.lock.read.release()
         self.assertFalse(self.lock.read.locked())
 
+    async def test_foreign_owner_cannot_downgrade(self):
+        await self.lock.write.acquire()
+        try:
+            async def foreign_task():
+                self.lock.write.downgrade()
+
+            with self.assertRaisesRegex(RuntimeError, "Permission denied"):
+                await asyncio.create_task(foreign_task())
+            self.assertTrue(self.lock.write.locked())
+            self.assertFalse(self.lock.read.locked())
+        finally:
+            self.lock.write.release()
+
     async def test_writer_downgrade_wakes_readers(self):
         await self.lock.write.acquire()
         

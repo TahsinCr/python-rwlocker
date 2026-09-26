@@ -42,7 +42,7 @@ Python'daki standart kilitler (`Lock`, `RLock`) **Exclusive (Dışlayıcı)** ki
 
 * **Hem Thread Hem Asyncio Desteği:** Çalışma zamanına uygun senkron (`rwlocker.thread_rwlock`) ve asenkron (`rwlocker.async_rwlock`) arayüzleri kullanabilirsiniz.
 * **Akıllı Proxy Mimarisi (Smart Proxy Architecture):** `.read` ve `.write` proxy'leri ile `with` ve `async with` context manager'larını sezgisel olarak kullanma imkanı.
-* **Atomik Derece Düşürme (Downgrading):** Yazma kilidini tamamen serbest bırakmadan, araya başka bir yazar girmesine izin vermeden anında Okuma kilidine (`downgrade()`) düşürebilme özelliği.
+* **Atomik Derece Düşürme (Downgrading):** Yazma kilidini tamamen serbest bırakmadan, araya başka bir yazar girmesine izin vermeden anında Okuma kilidine (`downgrade()`) düşürebilme özelliği. Bu işlemi yalnızca yazma kilidinin sahibi yapabilir.
 * **Yazar Reentrancy'si:** `ReentrantWriter` varyantları, kilidin sahibi olan thread veya task'ın iç içe yazma kilitleri ve bir okuma kilidi almasına izin verir; diğer okuyucular `.downgrade()` paylaşımlı erişimi açtıktan sonra katılabilir.
 * **Condition Bekleme Kuyrukları:** Bekleyenler FIFO deque yapısında tutulur. Normal ekleme/çıkarma amortize O(1); tüm bekleyenleri bildirme ve iptal edilen bekleyeni kuyruktan çıkarma O(N) olabilir. `Condition.wait()` tam bir kilit edinimi gerektirir; özyinelemeli derinlik saklanıp geri yüklenmediğinden iç içe edinimler `RuntimeError` üretir.
 * **Asenkron İptal Temizliği:** İptal edilen task kuyruktan çıkarılır; condition bekleyişi iptal hatası yayılmadan önce ilişkili kilidi yeniden alır.
@@ -59,8 +59,8 @@ Sisteminizin darboğaz profiline göre doğru kilit stratejisini seçebilirsiniz
 | Strateji Türü | Sınıf Adı (Thread / Async) | Açıklama | Ne Zaman Kullanılır? |
 | --- | --- | --- | --- |
 | **Yazar Öncelikli** | `RWLockWrite` / `AsyncRWLockWrite` | Bekleyen bir yazar varsa, yeni okuyucuların girmesini yasaklar. Bekleyen yazarlara öncelik verir; yazarlar ilerlediği sürece açlık riskini azaltabilir. | Okuma yoğun sistemlerde yazarların ezilmesini engellemek için. |
-| **Okur Öncelikli** | `RWLockRead` / `AsyncRWLockRead` | Yazarlar beklese bile yeni okuyucuları sürekli içeri alır. Maksimum paralellik sağlar. | Yazma işlemlerinin çok nadir veya önemsiz olduğu önbellek (cache) yapılarında. |
-| **Okuyucu-Faz Adil** | `RWLockReaderPhaseFair` / `AsyncRWLockReaderPhaseFair` | Okuyucu ve yazar fazları arasında geçiş yapar, ancak açık bir okuyucu fazı başladıktan sonra geç gelen okuyucular da daha yüksek okuma throughput'u için o faza katılabilir. | Her okuyucu grubunu tamamen dondurmadan, sınırlı adalet ile yüksek okuma verimi istediğinizde. |
+| **Okur Öncelikli** | `RWLockRead` / `AsyncRWLockRead` | Yazar beklerken yeni okuyucuların katılmasına izin verir; bu, okuyucular tamamlanana kadar yazarı geciktirebilir. | Yazma işlemlerinin çok nadir veya önemsiz olduğu önbellek (cache) yapılarında. |
+| **Okuyucu-Faz Adil** | `RWLockReaderPhaseFair` / `AsyncRWLockReaderPhaseFair` | Okuyucu ve yazar fazları arasında geçiş yapar, ancak açık bir okuyucu fazı başladıktan sonra geç gelen okuyucular da daha yüksek okuma throughput'u için o faza katılabilir. | Okuyucu fazlarında daha yüksek okuma verimi istediğinizde; sürekli yeni okuyucu gelişi yazarı geciktirebilir. |
 | **Adil (Fair)** | `RWLockFair` / `AsyncRWLockFair` | Her okuyucu fazının üyeliğini faz başında dondurur; böylece geç gelen okuyucular sıradaki yazarı kesemez. Kilit sahipleri ilerlediği sürece aç kalma riskini azaltmak üzere tasarlanmıştır. | Sıralı yazar erişiminin önemli olduğu çift yönlü trafiklerde. |
 > 💡 **Condition Uyumluluğu:** `RWCondition` ve `AsyncRWCondition` yukarıdaki kilit stratejilerini kabul eder. Stratejiyi okuyucu/yazıcı zamanlama özelliklerine göre seçin.
 <br/>
@@ -70,7 +70,7 @@ Sisteminizin darboğaz profiline göre doğru kilit stratejisini seçebilirsiniz
 Geliştiricilerin bu kütüphaneyi kullanırken bilmesi gereken mühendislik gerçekleri:
 
 1. **CPU-Bound vs I/O-Bound Gerçeği:**
-`rwlocker`, gücünü Python'un GIL (Global Interpreter Lock) mekanizmasının serbest bırakıldığı anlardan (Ağ istekleri, Veritabanı sorguları, Dosya okuma/yazma vb.) alır. Eğer `time.sleep()` içermeyen, sadece ağır matematik hesaplamaları (CPU-Bound) yapan işlemler için kilit arıyorsanız, GIL sebebiyle gerçek paralellik elde edemezsiniz ve C-tabanlı olan standart `threading.Lock` daha düşük edinme maliyetine sahip olabilir. Bu kilitler, okuyucu bölümlerinin I/O veya kontrolü bırakan başka işlemler sırasında çakışabildiği durumlarda daha kullanışlıdır.
+GIL etkin bir CPython sürümünde thread kullanan kod için RWLock, Python ile yazılmış CPU ağırlıklı işleri paralel çalıştırmaz; bu tür işlerde standart `threading.Lock` daha düşük edinme maliyeti sunabilir. RWLock'lar, özellikle okuma bölümleri I/O beklerken birden fazla okuyucunun paylaşılan duruma aynı anda güvenle erişebildiği durumlarda kullanışlıdır. Asyncio tarafında aynı event-loop üzerindeki görevler `await` noktalarında sırayla ilerleyebilir; kontrolü bırakmayan CPU ağırlıklı kod event-loop'u durdurur. Free-threaded Python derlemelerinde CPU paralelliğinin koşulları farklıdır.
 2. **Circular References (Döngüsel Referanslar):**
 Kilit sınıfları, akıllı proxy nesneleri (`.read` ve `.write`) oluştururken döngüsel bir referans grafiği (Lock -> Proxy -> Lock) kurar. Bu tasarım bilerek seçilmiştir. Bellek temizliği (Garbage Collection) `__del__` ile değil, Python'un Cyclic GC motoru tarafından güvenle halledilir.
 3. **Strict Nested Write Locks:**
@@ -88,9 +88,11 @@ Doğrudan kilit işlemleri (ör. `with lock:`) dışlayıcı `.write` proxy’si
 
 Aşağıdaki grafikler, ağ/veritabanı benzeri I/O iş yüklerinin uçtan uca sonuçlarını gösterir. Tam iş yüklerini karşılaştırırlar; kilit edinme veya bildirim maliyetini tek başına ölçmezler.
 
-**🖥️ Test Ortamı:** Tüm testler **Intel Core i7-12700H (2.4GHz)** işlemci ve **EndeavourOS (Arch tabanlı Linux)** işletim sistemi üzerinde, **Python 3.14.3** ve deneysel **Free-Threading (3.14.3t)** yorumlayıcıları kullanılarak gerçekleştirilmiştir.
+**🖥️ Benchmark Ortamı:** Aşağıdaki benchmark sonuçları, **EndeavourOS (Arch tabanlı Linux)** üzerinde çalışan **Intel Core i7-12700H (2.4GHz)** işlemcide, **Python 3.14.3** ve deneysel **Free-Threading (3.14.3t)** yorumlayıcılarıyla toplandı. Bu bilgi benchmark ortamını açıklar; test paketi CI'da listelenen Python sürümlerinde de çalıştırılır.
 
 **🧪 Test Metodolojisi:** Ölçüm başlamadan önce worker’lar oluşturulur ve bir Event/bariyerle serbest bırakılır. I/O senaryosu her işlemde 1 ms uyur ve 10 iterasyon çalıştırır. Sonuçlar scheduler, interpreter ve makine yükünden etkilenir; sıfır hata payı vaat etmez.
+
+Ayrı bir sıfır uyku iş yükü için `python collect_benchmark_data_script.py figures/overhead/manual.json --profile overhead` kullanılabilir. Bu sonuçlar worker zamanlamasını ve senaryo işlemlerini de içerir; yalnızca kilit edinme gecikmesini ölçmez.
 
 ### 1. Okuma-Yazma Kilidi (RWLock) Karşılaştırmaları
 
@@ -175,7 +177,7 @@ class InMemoryCache:
         self._cache: Dict[str, Any] = {}
 
     def get(self, key: str) -> Optional[Any]:
-        # Okuyucular birbirini asla bloklamaz, maksimum verim sağlar!
+        # Bir yazar kilidi tutmuyorsa okuyucular kilidi paylaşabilir.
         with self._lock.read:
             time.sleep(0.01) # Ağ veya Serileştirme (I/O) simülasyonu
             return self._cache.get(key)
@@ -189,7 +191,7 @@ class InMemoryCache:
 cache = InMemoryCache()
 cache.set("status", "ONLINE")
 
-# Bu 50 thread aynı anda, beklemeden okuma yapabilir.
+# Bir yazar kilidi tutmadığı sürece thread'ler okuma kilidini paylaşabilir.
 threads = [threading.Thread(target=cache.get, args=("status",)) for _ in range(50)]
 for t in threads: t.start()
 
@@ -245,15 +247,14 @@ class AuthTokenManager:
         self._is_expired = False
 
     async def get_valid_token(self) -> str:
-        # Hızlı Yol: Token geçerliyse 500 task burayı beklemeden, aynı anda geçer.
+        # Token geçerliyse çağıranlar, yazar kilidi tutmadığı sürece okuma kilidini paylaşır.
         async with self._lock.read:
             if not self._is_expired:
                 return self._token
                 
         # Yavaş Yol: Token süresi dolmuş. Yazma kilidi al.
         async with self._lock.write:
-            # Çift kontrol (Double-checked locking): Biz kilidi beklerken 
-            # başka bir task içeri girip token'ı yenilemiş olabilir.
+            # Yazma kilidini beklerken başka bir task token'ı yenilemiş olabilir; yeniden kontrol et.
             if self._is_expired:
                 print("Token yenileniyor...")
                 await asyncio.sleep(0.5)  # API İsteği
@@ -309,7 +310,8 @@ from rwlocker.async_rwlock import AsyncRWLockRead, AsyncRWCondition
 
 class GlobalConfigCache:
     def __init__(self):
-        # Okuma çok yoğun olduğu için Read-Pref kilidi kullanıyoruz
+        # Okuyucu önceliği bu yoğun okuma iş yüküne uygundur; sürekli okuyucu
+        # trafiği bekleyen yazarı geciktirebilir.
         self._cond = AsyncRWCondition(AsyncRWLockRead())
         self._config = {"theme": "light", "version": 1}
         self._is_refreshing = False
@@ -437,7 +439,7 @@ Projeyi faydalı bulduysanız sağ üstten bir **Yıldız (⭐)** vermeyi unutma
 
 3. Yaptığınız değişiklikleri **Commit**'leyin (Açıklayıcı mesajlar kullanmaya özen gösterin):
     ```sh
-    git commit -m 'feat: AsyncRWLock için O(1) maliyetli yeni bir optimizasyon eklendi'
+    git commit -m 'fix: İptal edilen condition bekleyicilerini güvenle işle'
 
     ```
 

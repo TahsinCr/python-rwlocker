@@ -50,20 +50,23 @@ class BenchmarkOrchestrator:
             executable = str(Path(env_config["executable"]).expanduser())
             env_vars = env_config["env_vars"]
             
-            output_file = self.base_dir.joinpath(f"{env_name}.json")
-            print(f"[{env_name}] Collecting data -> {output_file}")
-            
             current_env = os.environ.copy()
             current_env.update(env_vars)
-            
-            command = [executable, str(self.target_script), str(output_file)]
-            
-            try:
-                subprocess.run(command, cwd=Path.cwd(), env=current_env, check=True)
-            except subprocess.CalledProcessError as e:
-                print(f"[{env_name}] Execution failed: {e}")
-            except FileNotFoundError:
-                print(f"'{executable}' command not found. Skipping...")
+
+            for profile in ("io", "overhead"):
+                output_dir = self.base_dir if profile == "io" else self.base_dir / "overhead"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_file = output_dir / f"{env_name}.json"
+                print(f"[{env_name}] Collecting {profile} data -> {output_file}")
+                command = [executable, str(self.target_script), str(output_file), "--profile", profile]
+
+                try:
+                    subprocess.run(command, cwd=Path.cwd(), env=current_env, check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"[{env_name}] {profile} collection failed: {e}")
+                except FileNotFoundError:
+                    print(f"'{executable}' command not found. Skipping...")
+                    break
 
 
 class BenchmarkPlotter:
@@ -163,7 +166,7 @@ class BenchmarkPlotter:
                     mask = scenario_mask & (df["Environment"] == environment)
                     baseline_mask = mask & df["Name"].str.contains("Baseline", na=False)
                     if baseline_mask.any():
-                        baseline_time = df.loc[baseline_mask, "Elapsed"].iloc[0]
+                        baseline_time = df.loc[baseline_mask, "Elapsed"].min()
                         df.loc[mask, "Speedup"] = baseline_time / df.loc[mask, "Elapsed"]
 
         return df

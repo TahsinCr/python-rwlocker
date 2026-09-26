@@ -14,8 +14,10 @@ class _RWLockWriteMixin:
 
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         del waiting, waiter_seq
-        return not self._writer_active and (
-            self._is_current_reader() or self.write.those_waiting == 0
+        if self._writer_active:
+            return False
+        return self.write.those_waiting == 0 or (
+            self._readers_active > 0 and self._is_current_reader()
         )
 
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
@@ -51,11 +53,13 @@ class _RWLockWriteMixin:
     def _downgrade_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Cannot downgrade unlocked lock")
+        if not self._is_current_writer():
+            raise RuntimeError("Permission denied")
         self._writer_active = False
         self._writer_owner = None
         self._readers_active += 1
         self._record_reader_acquire()
-        if self.read.condition.has_waiters():
+        if self.write.those_waiting == 0 and self.read.condition.has_waiters():
             self.read.condition.notify_all()
 
     def _on_writer_abort(self, waiter_seq: Optional[int] = None) -> None:
@@ -119,6 +123,8 @@ class _RWLockReadMixin:
     def _downgrade_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Cannot downgrade unlocked lock")
+        if not self._is_current_writer():
+            raise RuntimeError("Permission denied")
         self._writer_active = False
         self._writer_owner = None
         self._readers_active += 1
@@ -168,9 +174,9 @@ class _RWLockReaderPhaseFairMixin:
         del waiting, waiter_seq
         if self._writer_active:
             return False
-        if self._is_current_reader():
-            return True
-        return self._readers_turn or self.write.those_waiting == 0
+        return self._readers_turn or self.write.those_waiting == 0 or (
+            self._readers_active > 0 and self._is_current_reader()
+        )
 
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         del waiting, waiter_seq
@@ -213,6 +219,8 @@ class _RWLockReaderPhaseFairMixin:
     def _downgrade_core(self) -> None:
         if not self._writer_active:
             raise RuntimeError("Cannot downgrade unlocked lock")
+        if not self._is_current_writer():
+            raise RuntimeError("Permission denied")
         self._writer_active = False
         self._writer_owner = None
         self._readers_active += 1
@@ -278,13 +286,11 @@ class _RWLockFairMixin:
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         if self._writer_active:
             return False
-        if self._is_current_reader():
+        if self.write.those_waiting == 0:
             return True
-        if self._readers_turn:
-            if self.write.those_waiting == 0:
-                return True
-            return self._is_reserved_reader(waiting, waiter_seq)
-        return self.write.those_waiting == 0
+        if self._readers_turn and self._is_reserved_reader(waiting, waiter_seq):
+            return True
+        return self._readers_active > 0 and self._is_current_reader()
 
     def _acquire_read_core(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> None:
         self._consume_reader_phase_slot(waiting, waiter_seq)
