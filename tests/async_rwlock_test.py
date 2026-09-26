@@ -1,6 +1,7 @@
 import unittest
 import asyncio
 from typing import Type
+from unittest.mock import patch
 
 from rwlocker.async_rwlock import (
     AsyncRWLockWrite, AsyncRWLockWriteReentrantWriter,
@@ -267,6 +268,11 @@ class AsyncRWLockTests(BaseAsyncLockTests):
             self.fail("Could not acquire lock after a waiting task was cancelled. Wait queue might be corrupted.")
 
 class ReentrantWriterAsyncTestsMixin:
+    async def test_uncontended_read_skips_owner_lookup(self):
+        with patch.object(type(self.lock), "_is_current_reader", side_effect=AssertionError("unexpected owner lookup")):
+            async with self.lock.read:
+                self.assertTrue(self.lock.read.locked())
+
     async def test_reentrant_write(self):
         async with self.lock.write:
             success = await self.lock.write.acquire(blocking=False)
@@ -408,11 +414,69 @@ class TestAsyncRWLockWrite(AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
 class TestAsyncRWLockWriteReentrantWriter(ReentrantWriterAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockWriteReentrantWriter
 
+    async def test_downgrade_does_not_wake_readers_behind_waiting_writer(self):
+        await self.lock.write.acquire()
+        completed = []
+
+        async def writer():
+            async with self.lock.write:
+                completed.append("writer")
+
+        async def reader():
+            async with self.lock.read:
+                completed.append("reader")
+
+        writer_task = asyncio.create_task(writer())
+        reader_task = asyncio.create_task(reader())
+        try:
+            await self._wait_for_waiters(readers=1, writers=1)
+            queue = self.lock.read.condition
+            notify_all = type(queue).notify_all
+            read_broadcasts = []
+
+            def observe_notify_all(current_queue):
+                if current_queue is queue:
+                    read_broadcasts.append(True)
+                return notify_all(current_queue)
+
+            with patch.object(type(queue), "notify_all", observe_notify_all):
+                self.lock.write.downgrade()
+            self.assertEqual(read_broadcasts, [])
+        finally:
+            self.lock.write.release()
+            await asyncio.wait_for(asyncio.gather(writer_task, reader_task), timeout=2)
+        self.assertEqual(completed, ["writer", "reader"])
+
 class TestAsyncRWLockRead(AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockRead
 
 class TestAsyncRWLockReadReentrantWriter(ReentrantWriterAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockReadReentrantWriter
+
+    async def test_downgrade_admits_readers_while_writer_waits(self):
+        await self.lock.write.acquire()
+        reader_entered = asyncio.Event()
+        writer_entered = asyncio.Event()
+
+        async def writer():
+            async with self.lock.write:
+                writer_entered.set()
+
+        async def reader():
+            async with self.lock.read:
+                reader_entered.set()
+
+        writer_task = asyncio.create_task(writer())
+        reader_task = asyncio.create_task(reader())
+        try:
+            await self._wait_for_waiters(readers=1, writers=1)
+            self.lock.write.downgrade()
+            await asyncio.wait_for(reader_entered.wait(), timeout=1)
+            self.assertFalse(writer_entered.is_set())
+        finally:
+            self.lock.write.release()
+            await asyncio.wait_for(asyncio.gather(writer_task, reader_task), timeout=2)
+        self.assertTrue(writer_entered.is_set())
 
 class TestAsyncRWLockReaderPhaseFair(FairPhaseAsyncTestsMixin, AsyncRWLockTests, unittest.IsolatedAsyncioTestCase):
     lock_class = AsyncRWLockReaderPhaseFair

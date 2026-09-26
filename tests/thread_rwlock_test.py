@@ -267,6 +267,11 @@ class RWLockTests(BaseLockTests):
             self.fail(f"Releasing write lock after a timed-out read attempt raised an exception: {e}")
 
 class ReentrantWriterTestsMixin:
+    def test_uncontended_read_skips_owner_lookup(self):
+        with patch.object(type(self.lock), "_is_current_reader", side_effect=AssertionError("unexpected owner lookup")):
+            with self.lock.read:
+                self.assertTrue(self.lock.read.locked())
+
     def test_reentrant_write(self):
         with self.lock.write:
             success = self.lock.write.acquire(blocking=False)
@@ -529,11 +534,79 @@ class TestRWLockWrite(RWLockTests, unittest.TestCase):
 class TestRWLockWriteReentrantWriter(ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
     lock_class = RWLockWriteReentrantWriter
 
+    def test_downgrade_does_not_wake_readers_behind_waiting_writer(self):
+        self.lock.write.acquire()
+        completed = []
+
+        def writer():
+            with self.lock.write:
+                completed.append("writer")
+
+        def reader():
+            with self.lock.read:
+                completed.append("reader")
+
+        writer_thread = threading.Thread(target=writer)
+        reader_thread = threading.Thread(target=reader)
+        writer_thread.start()
+        reader_thread.start()
+        try:
+            self._wait_for_waiters(readers=1, writers=1)
+            queue = self.lock.read.condition
+            notify_all = type(queue).notify_all
+            read_broadcasts = []
+
+            def observe_notify_all(current_queue):
+                if current_queue is queue:
+                    read_broadcasts.append(True)
+                return notify_all(current_queue)
+
+            with patch.object(type(queue), "notify_all", observe_notify_all):
+                self.lock.write.downgrade()
+            self.assertEqual(read_broadcasts, [])
+        finally:
+            self.lock.write.release()
+            writer_thread.join(timeout=2)
+            reader_thread.join(timeout=2)
+        self.assertFalse(writer_thread.is_alive())
+        self.assertFalse(reader_thread.is_alive())
+        self.assertEqual(completed, ["writer", "reader"])
+
 class TestRWLockRead(RWLockTests, unittest.TestCase):
     lock_class = RWLockRead
 
 class TestRWLockReadReentrantWriter(ReentrantWriterTestsMixin, RWLockTests, unittest.TestCase):
     lock_class = RWLockReadReentrantWriter
+
+    def test_downgrade_admits_readers_while_writer_waits(self):
+        self.lock.write.acquire()
+        reader_entered = threading.Event()
+        writer_entered = threading.Event()
+
+        def writer():
+            with self.lock.write:
+                writer_entered.set()
+
+        def reader():
+            with self.lock.read:
+                reader_entered.set()
+
+        writer_thread = threading.Thread(target=writer)
+        reader_thread = threading.Thread(target=reader)
+        writer_thread.start()
+        reader_thread.start()
+        try:
+            self._wait_for_waiters(readers=1, writers=1)
+            self.lock.write.downgrade()
+            self.assertTrue(reader_entered.wait(timeout=1))
+            self.assertFalse(writer_entered.is_set())
+        finally:
+            self.lock.write.release()
+            writer_thread.join(timeout=2)
+            reader_thread.join(timeout=2)
+        self.assertFalse(writer_thread.is_alive())
+        self.assertFalse(reader_thread.is_alive())
+        self.assertTrue(writer_entered.is_set())
 
 class TestRWLockReaderPhaseFair(FairPhaseTestsMixin, RWLockTests, unittest.TestCase):
     lock_class = RWLockReaderPhaseFair

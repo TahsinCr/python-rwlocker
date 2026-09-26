@@ -339,7 +339,7 @@ class _RWLockReentrantWriterCoreMixin:
     def _is_write_locked(self) -> bool:
         return self._writer_id is not None
 
-    def _downgrade_to_read_notify_all(self) -> None:
+    def _downgrade_to_read_notify_all(self, notify_waiting_readers: bool = True) -> None:
         if not self._is_current_writer():
             raise RuntimeError("Permission denied")
         if self._write_count > 1:
@@ -348,7 +348,7 @@ class _RWLockReentrantWriterCoreMixin:
         self._write_count = 0
         self._readers_active += 1
         self._record_reader_acquire()
-        if self.read.condition.has_waiters():
+        if notify_waiting_readers and self.read.condition.has_waiters():
             self.read.condition.notify_all()
 
     def _downgrade_to_reader_phase(self) -> None:
@@ -371,7 +371,9 @@ class _RWLockWriteReentrantWriterMixin(_RWLockReentrantWriterCoreMixin):
         del waiting, waiter_seq
         if self._writer_id is not None:
             return self._is_current_writer()
-        return self._is_current_reader() or self.write.those_waiting == 0
+        return self.write.those_waiting == 0 or (
+            self._readers_active > 0 and self._is_current_reader()
+        )
 
     def _can_write(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         del waiting, waiter_seq
@@ -380,7 +382,9 @@ class _RWLockWriteReentrantWriterMixin(_RWLockReentrantWriterCoreMixin):
         return self._readers_active == 0
 
     def _downgrade_core(self):
-        self._downgrade_to_read_notify_all()
+        self._downgrade_to_read_notify_all(
+            notify_waiting_readers=self.write.those_waiting == 0
+        )
 
 class _RWLockReadReentrantWriterMixin(_RWLockReentrantWriterCoreMixin):
     """Internal read-preferring reentrant-writer logic."""
@@ -411,9 +415,9 @@ class _RWLockReaderPhaseFairReentrantWriterMixin(_RWLockReentrantWriterCoreMixin
         del waiting, waiter_seq
         if self._writer_id is not None:
             return self._is_current_writer()
-        if self._is_current_reader():
-            return True
-        return self._readers_turn or self.write.those_waiting == 0
+        return self._readers_turn or self.write.those_waiting == 0 or (
+            self._readers_active > 0 and self._is_current_reader()
+        )
 
     def _can_write(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         del waiting, waiter_seq
@@ -436,13 +440,11 @@ class _RWLockFairReentrantWriterMixin(_RWLockReentrantWriterCoreMixin):
     def _can_read(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         if self._writer_id is not None:
             return self._is_current_writer()
-        if self._is_current_reader():
+        if self.write.those_waiting == 0:
             return True
-        if self._readers_turn:
-            if self.write.those_waiting == 0:
-                return True
-            return self._is_reserved_reader(waiting, waiter_seq)
-        return self.write.those_waiting == 0
+        if self._readers_turn and self._is_reserved_reader(waiting, waiter_seq):
+            return True
+        return self._readers_active > 0 and self._is_current_reader()
 
     def _can_write(self, waiting: bool = False, waiter_seq: Optional[int] = None) -> bool:
         del waiting, waiter_seq

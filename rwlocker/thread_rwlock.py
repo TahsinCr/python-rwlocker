@@ -37,7 +37,7 @@ from .queues import (
     ThreadConditionQueue
 )
 
-__version__ = '3.4.3'
+__version__ = '3.4.4'
 __all__ = (
     'Lockable', 'LockDowngradable', 
     'RWLockBase', 'RWLockWithProxyBase',

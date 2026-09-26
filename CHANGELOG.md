@@ -1,13 +1,25 @@
 # **Change Log**
 All notable changes to this project will be documented in this file.
 
+## **[3.4.4] - 27.09.2026**
+The **"Reentrant Writer Fast Paths"** patch completes the 3.4.3 scheduling optimizations for reentrant-writer locks.
+
+### Improved
+* Skip reader-owner lookups on uncontended read acquisitions in write-preferring, reader-phase-fair, and strict-fair reentrant-writer variants. Recursive readers still bypass queued writers when required to avoid self-deadlock.
+* During a write-preferring reentrant-writer downgrade, leave queued readers asleep if another writer is waiting. Reader-preferring downgrade behavior is unchanged.
+* Add synchronous and asynchronous regression coverage for both performance paths.
+
+### Validation
+* The local suite ran 612 tests on Python 3.14.7 (19 skipped with plotting dependencies installed), Python 3.10.18 (21 skipped), and free-threaded Python 3.14.3t with the GIL disabled (21 skipped); all runs passed.
+* The 3.4.4 sdist and wheel built locally, and `twine check` passed for both.
+
 ## **[3.4.3] - 27.09.2026**
 The **"Ownership and Compatibility"** patch prevents foreign-owner downgrades and restores the documented Python 3.9–3.14 behavior of the standard adapters.
 
 ### Fixed
 * Reject `downgrade()` from a different thread or task in every non-reentrant RWLock strategy, including locks used by `RWCondition` and `AsyncRWCondition`.
 * Make `Lock(threading.RLock()).locked()` and `Condition().locked()` work on Python versions before 3.14.
-* Keep recursive-reader ownership checks on contended read paths and skip upgrade checks when no reader is active.
+* Keep recursive-reader ownership checks on contended read paths in non-reentrant variants and skip upgrade checks when no reader is active.
 * Avoid waking queued readers during a write-preferring downgrade while another writer is waiting.
 * Use the fastest synchronous baseline in each interpreter environment when recalculating figure speedups.
 
